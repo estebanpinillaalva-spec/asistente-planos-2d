@@ -39,6 +39,7 @@ Objetivo primario: **portfolio potente + aprender IA aplicada**. Negocio: solo o
 ## Estado actual
 
 - **Fase 0 (Validación y encuadre)** — recién iniciada. Ver plan completo por fases en `ESTUDIO-Y-PLAN.md` §7.
+- **Repo:** https://github.com/estebanpinillaalva-spec/asistente-planos-2d — privado por ahora; pasar a público en Fase 4, cuando el portfolio esté presentable. Los modelos de `banco-de-pruebas/` están en `.gitignore` por posible confidencialidad (piezas reales del trabajo).
 - Próxima tarea: **0.1 — test de 48h** con un MCP de SolidWorks existente (instrucciones en `EMPEZAR-AQUI.md`).
 
 ## Mapa de documentos
