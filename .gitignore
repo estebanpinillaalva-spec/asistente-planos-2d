@@ -1,0 +1,19 @@
+# Archivos temporales y de bloqueo de SolidWorks
+~$*
+*.swlck
+*.swBackUp
+*.bak
+
+# Modelos reales del banco de pruebas — pueden ser piezas confidenciales del trabajo.
+# Si en el futuro decides publicar alguna (pieza propia, sin IP de terceros), quita su exclusión.
+banco-de-pruebas/*
+!banco-de-pruebas/README.md
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Salidas locales
+*.log
