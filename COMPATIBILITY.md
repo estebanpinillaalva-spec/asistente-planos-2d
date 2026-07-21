@@ -2,10 +2,11 @@
 
 ## Entorno pineado
 
-- **Versión de SolidWorks:** (rellenar, p. ej. SolidWorks 2024 SP5)
+- **Versión de SolidWorks:** `RevisionNumber` = **31.2.1** (la serie 31 corresponde a SolidWorks 2023 — año comercial inferido, no leído de la API). **Esta es la versión pineada del proyecto.**
 - **Tipo de licencia y nota EULA (tarea 0.4):** (¿permite uso de API en proyectos personales? ¿restricciones comerciales?)
 - **Windows:** 11 Pro
-- **Python:** (versión) · **pywin32:** (versión)
+- **Python:** 3.14.4 (venv del proyecto en `.venv/`) · **pywin32:** 312 (wheel `cp314`)
+- **COM registrado:** `SldWorks.Application` presente en `HKLM:\SOFTWARE\Classes` ✅
 
 > Regla: se desarrolla SOLO contra esta versión. La compatibilidad multi-versión es problema de una eventual fase producto, no del estudio.
 
@@ -15,4 +16,11 @@
 
 | Interfaz.Método | Para qué se usa | Desde (fase/tarea) | Notas |
 |---|---|---|---|
-| (p. ej. `ISldWorks.ActiveDoc`) | (leer modelo activo) | (0.5) | |
+| `ISldWorks.RevisionNumber` | Leer versión/build de SolidWorks | 0.5 | |
+| `ISldWorks.ActiveDoc` | Obtener el documento activo | 0.5 | Devuelve `None` si no hay documento abierto |
+| `ISldWorks.Visible` | Hacer visible SolidWorks al arrancarlo | 0.5 | ⚠️ **SIN VERIFICAR** — solo en la ruta `--iniciar`, que nunca se ha ejecutado |
+| `IModelDoc2.GetTitle` | Nombre del documento activo | 0.5 | |
+| `IModelDoc2.GetPathName` | Ruta completa del documento | 0.5 | Vacío si el documento no se ha guardado nunca |
+| `IModelDoc2.GetType` | Tipo de documento | 0.5 | 1=pieza · 2=ensamblaje · 3=plano |
+
+> Conexión: `win32com.client.GetActiveObject("SldWorks.Application")` para engancharse a una instancia abierta; `Dispatch(...)` solo con `--iniciar`. Los errores se capturan como `pywintypes.com_error`.

@@ -5,9 +5,19 @@
 
 ## 1. Familia elegida
 
-- **Nombre:** (p. ej. "ejes con chavetero", "placas taladradas", "chapas plegadas para láser")
-- **Por qué esta:** (la delineas a menudo, features enumerables, dolor real)
-- **Ejemplos en `banco-de-pruebas/`:** (listar los archivos)
+- **Nombre:** **Placas y soportes planos taladrados** (chapa/plancha cortada plana, con taladros y contorno; espesor constante).
+- **Por qué esta:**
+  - Es la familia con más ejemplares reales disponibles (~15) y con **6 planos previos hechos por Esteban** que sirven de verdad de referencia.
+  - **Vistas casi deterministas:** una vista principal + espesor. Simplifica mucho la Fase 1.
+  - **Features enumerables:** contorno, taladros (⌀ y posición), avellanados, radios de esquina.
+  - Salida directa a **DXF para corte láser**, que es lo facturable de la Fase 4.
+  - Son piezas del **TFG (kart) de Esteban, no del trabajo** → sin problema de confidencialidad, publicables en el portfolio.
+- **Ejemplos en `banco-de-pruebas/`** (11 piezas copiadas el 2026-07-21):
+  `Chapa delantera` · `chapa motor` · `placa rodamientos` · `Soporte direccion 3` · `soporte dirección 2` · `soporte dirección` · `soporte mangueta` · `soporte naylon` · `soporte transmisión` · `soporte caliper` · `soporte freno`
+- **Planos de referencia** en `banco-de-pruebas/planos-referencia/` (14 `.SLDDRW` hechos por Esteban). Sirven para rellenar las secciones 2-6 de esta spec. Ojo: al copiarlos fuera de su carpeta original, SolidWorks puede pedir relocalizar el modelo asociado.
+
+> [!warning] Por revisar por Esteban
+> La selección de las 11 piezas se hizo por nombre, sin abrir la geometría. **Confirma que todas son realmente placas planas** y elimina del banco las que no lo sean (p. ej. si `soporte naylon` o `soporte transmisión` no son planas). Objetivo: 10-15 piezas homogéneas.
 
 ## 2. Vistas que exige el plano
 

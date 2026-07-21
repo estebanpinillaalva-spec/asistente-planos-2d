@@ -17,3 +17,10 @@ venv/
 
 # Salidas locales
 *.log
+
+# Biblioteca de conocimiento en Obsidian — copia descompuesta de los docs para
+# consultas con menos tokens. Privada por ahora; decidir en Fase 4 si se publica.
+biblioteca/
+
+# Config del vault de Obsidian (workspace/appearance locales, no aporta al repo)
+.obsidian/
