@@ -38,5 +38,21 @@
 | `IModelDocExtension.SaveAs` | Exportar plano a PDF/PNG | 1.4 | Vía preferente; formato deducido de la extensión |
 | `IModelDoc2.SaveAs` | Exportar plano (plan B) | 1.4 | Es la que acabó funcionando en la 31.2.1 |
 | `ISldWorks.SetUserPreferenceIntegerValue` | Fijar resolución de imagen | 1.4 | `swTiffPrintDPI` (=9) a 300 DPI |
+| `IModelDoc2.GetModelViewNames` | Listar las vistas con nombre de la pieza | 1.2 | ⚠️ **Devuelve nombres traducidos** — ver aviso abajo |
+| `ISldWorks.NewDocument` | Crear el documento de plano | 1.1 | Con la plantilla `.drwdot` por defecto |
+| `ISldWorks.GetUserPreferenceStringValue` | Obtener la plantilla de dibujo por defecto | 1.1 | |
+| `IDrawingDoc.SetupSheet5` | Aplicar el formato de hoja `.slddrt` | 1.1 | `swDwgPapersUserDefined=12`. **El `.slddrt` impone su propio tamaño y orientación**: los valores que se le pasan no mandan |
+| `IDrawingDoc.GetCurrentSheet` + `ISheet.GetProperties2` | **Leer** el tamaño real de la hoja aplicada | 1.1 | Índices: ancho=5, alto=6. Es la única fuente fiable del tamaño |
+| `ISldWorks.ActivateDoc3` | Activar el plano antes de insertar vistas | 1.2 | La API exige que el plano sea el documento activo |
+| `IDrawingDoc.CreateDrawViewFromModelView3` | Insertar una vista | 1.2 | Coordenadas en **metros** y referidas al **centro** de la vista |
+| `IDrawingDoc.GetSheetNames` · `IModelDoc2.ForceRebuild3` | Auxiliares | 1.1 | |
+
+> [!danger] Lección: los nombres de vista están TRADUCIDOS
+> En esta instalación (SolidWorks 2023 en español), `GetModelViewNames` devuelve:
+> `*Normal a`, `*Frontal`, `*Posterior`, `*Izquierda`, `*Derecha`, `*Superior`, `*Inferior`, `*Isométrica`, `*Trimétrica`, `*Dimétrica`.
+> El alzado es **`*Frontal`** — ni `*Front` ni `*Alzado`. **Nunca escribir estos nombres a mano:** hay que leerlos con `GetModelViewNames` y emparejarlos de forma flexible (sin asterisco, ni mayúsculas, ni acentos).
+
+> [!warning] Orientación de las plantillas de la escuela (medida, no supuesta)
+> `ig_2017_a4_-_iso.slddrt` es **vertical** (0,210 × 0,297 m). `a3` y `a2` son **apaisadas**. Confirmado leyendo `ISheet.GetProperties2` tras aplicar el formato.
 
 > Conexión: `win32com.client.GetActiveObject("SldWorks.Application")` para engancharse a una instancia abierta; `Dispatch(...)` solo con `--iniciar`. Los errores se capturan como `pywintypes.com_error`.

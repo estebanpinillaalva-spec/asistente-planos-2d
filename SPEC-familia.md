@@ -45,6 +45,7 @@
 |---|---|---|
 | **Alzado** (cara de la placa) | **Sí** | Muestra el contorno y todos los taladros. Es la vista principal y donde van las cotas de posición en el plano de la chapa |
 | **Sección / corte** | **Sí, al menos una** | Se usa **corte (D-D, E-E), no vista lateral simple**. Ahí se acota el **espesor**. Una sección vertical para situar taladros en altura; una segunda sección horizontal si hay un agujero central que acotar (⌀50 en E-E) |
+| ↳ **Dónde pasa la línea de corte** | Regla de Esteban (2026-07-21) | **Siempre por los taladros, por el eje de una fila de taladros.** Así el corte muestra a la vez el espesor y las posiciones verticales de los agujeros. Es la regla que hace la sección automatizable |
 | **Isométrica** | **Sí** | Arriba a la derecha, **sin ninguna cota**. Solo para comprender la pieza |
 | Planta / perfil estándar | **No** | No aparecen en ninguno de los dos planos: su función la cumplen los cortes |
 | Detalles ampliados | No observados | (¿los usas cuando hay algo pequeño?) |
@@ -74,7 +75,21 @@
 
 ## 5. Cajetín
 
-- **Plantilla:** formato de la **Escuela de Ingeniería Industrial, Universidad de Vigo** (con logo). Falta localizar el `.slddrt`.
+- **Plantilla:** `ig_2017_a2/a3/a4_-_iso.slddrt` (Ingeniería Gráfica, EPI Universidad de Vigo), en `Desktop\TFG DOCUMENTACION\Plantillas_TFG (1)`. Tres tamaños ⇒ el motor elige formato según el tamaño de la pieza.
+
+> [!important] Decisión de Esteban (2026-07-21): **el cajetín lo rellena siempre la persona**
+> Es identidad y trazabilidad, no geometría deducible. El motor **propone**, Esteban **decide**. Reparto acordado:
+>
+> | El motor lo deduce | Esteban lo aporta |
+> |---|---|
+> | Escala · Fecha · Dibujado por · Formato (A2/A3/A4) · Tol.Dim (ISO 2768-mK) · Proyección | **Denominación · Referencia `KAM-00XX` · Material · Plano Nº** |
+>
+> **Interfaz:** la conversación (cliente MCP), no una UI propia — el plan excluye construir UI en los meses 1-4. En **Fase 1** los datos entran por un **YAML por pieza**; en **Fase 2** Claude pregunta y rellena ese mismo YAML. Ese fichero es, de hecho, **el primer esquema del contrato LLM↔motor**.
+>
+> **Persistencia:** lo que Esteban confirme se escribe como **propiedad personalizada de la pieza**, para no volver a teclearlo nunca (y para que el BOM lo herede).
+
+> [!warning] Estado real comprobado (2026-07-21)
+> Las 8 piezas del banco **no tienen ninguna propiedad personalizada ni material asignado**, y los planos tampoco (solo `SWFormatSize`, automática). Hoy el cajetín está **escrito a mano** en cada plano. Por eso la tarea 1.3 no puede "copiar propiedades": tiene que **crearlas**.
 - **Campos que rellena:**
 
   | Campo | Ejemplo | ¿De propiedad del modelo? |
