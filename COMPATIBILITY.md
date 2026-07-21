@@ -27,5 +27,10 @@
 | `IPartDoc.GetBodies2` | Sólidos de la pieza | 0.2 | Solo como plan B si `GetPartBox` falla |
 | `IBody2.GetBodyBox` | Caja envolvente de un sólido | 0.2 | Plan B de `GetPartBox` |
 | `ISldWorks.CloseDoc` | Cerrar el documento tras medirlo | 0.2 | Imprescindible para no acumular piezas abiertas |
+| `ISldWorks.GetDocuments` | Listar documentos ya abiertos | 0.3 | Para **no cerrar** los que el usuario tenía abiertos |
+| `IModelDoc2.Extension` | Acceso a `IModelDocExtension` | 1.4 | Devuelve objeto COM → acceso directo, no `leer()` |
+| `IModelDocExtension.SaveAs` | Exportar plano a PDF/PNG | 1.4 | Vía preferente; formato deducido de la extensión |
+| `IModelDoc2.SaveAs` | Exportar plano (plan B) | 1.4 | Es la que acabó funcionando en la 31.2.1 |
+| `ISldWorks.SetUserPreferenceIntegerValue` | Fijar resolución de imagen | 1.4 | `swTiffPrintDPI` (=9) a 300 DPI |
 
 > Conexión: `win32com.client.GetActiveObject("SldWorks.Application")` para engancharse a una instancia abierta; `Dispatch(...)` solo con `--iniciar`. Los errores se capturan como `pywintypes.com_error`.

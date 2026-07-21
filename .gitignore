@@ -20,6 +20,7 @@ venv/
 # Salidas locales
 *.log
 notas/clasificacion-planas.csv
+notas/planos-pdf/
 
 # Biblioteca de conocimiento en Obsidian — copia descompuesta de los docs para
 # consultas con menos tokens. Privada por ahora; decidir en Fase 4 si se publica.

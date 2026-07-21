@@ -11,7 +11,14 @@ import pythoncom
 import pywintypes
 import win32com.client
 
-from com_utils import conectar, leer, texto_error_com
+from com_utils import (
+    conectar,
+    es_archivo_bloqueo,
+    leer,
+    normalizar_ruta,
+    obtener_rutas_documentos_abiertos,
+    texto_error_com,
+)
 
 
 # Una placa de este banco de pruebas no debe superar este espesor.
@@ -55,7 +62,11 @@ def buscar_piezas(carpetas):
             continue
 
         for ruta in carpeta.rglob("*"):
-            if ruta.is_file() and ruta.suffix.lower() == ".sldprt":
+            if (
+                ruta.is_file()
+                and ruta.suffix.lower() == ".sldprt"
+                and not es_archivo_bloqueo(ruta)
+            ):
                 piezas.add(ruta.resolve())
 
     return sorted(piezas, key=lambda ruta: str(ruta).lower())
@@ -159,11 +170,12 @@ def resultado_vacio(ruta):
     }
 
 
-def procesar_pieza(swapp, ruta):
+def procesar_pieza(swapp, ruta, rutas_abiertas_antes):
     """Abre, mide, clasifica y cierra una pieza sin propagar sus errores."""
     resultado = resultado_vacio(ruta)
     documento = None
     nombre_para_cerrar = ruta.name
+    ya_estaba_abierta = normalizar_ruta(ruta) in rutas_abiertas_antes
 
     try:
         documento, errores, avisos = abrir_pieza(swapp, ruta)
@@ -198,7 +210,8 @@ def procesar_pieza(swapp, ruta):
     except Exception as error:
         resultado["error"] = texto_error(error)
     finally:
-        if documento is not None:
+        # No cerramos documentos que el usuario ya tenía abiertos al comenzar.
+        if documento is not None and not ya_estaba_abierta:
             try:
                 swapp.CloseDoc(nombre_para_cerrar)
             except (pywintypes.com_error, AttributeError) as error:
@@ -286,13 +299,15 @@ def main():
         if swapp is None:
             return 1
 
+        # GetDocuments registra qué documentos pertenecían ya al usuario.
+        rutas_abiertas_antes = obtener_rutas_documentos_abiertos(swapp)
         piezas = buscar_piezas(carpetas)
         print(f"Piezas SLDPRT encontradas: {len(piezas)}")
 
         resultados = []
         for indice, ruta in enumerate(piezas, start=1):
             print(f"[{indice}/{len(piezas)}] {ruta}")
-            resultado = procesar_pieza(swapp, ruta)
+            resultado = procesar_pieza(swapp, ruta, rutas_abiertas_antes)
             resultados.append(resultado)
 
         resultados = ordenar_resultados(resultados)

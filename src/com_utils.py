@@ -1,5 +1,7 @@
 """Ayudas sencillas para trabajar con SolidWorks mediante COM y pywin32."""
 
+from pathlib import Path
+
 import pywintypes
 import win32com.client
 
@@ -86,3 +88,40 @@ def conectar(iniciar=False):
         print("No se pudo iniciar SolidWorks.")
         print(f"Detalle COM: {texto_error_com(error)}")
         return None
+
+
+def es_archivo_bloqueo(ruta):
+    """Indica si una ruta es un archivo temporal de bloqueo de SolidWorks."""
+    return Path(ruta).name.startswith("~$")
+
+
+def normalizar_ruta(ruta):
+    """Normaliza una ruta para poder compararla sin distinguir mayúsculas."""
+    return str(Path(ruta).expanduser().resolve()).casefold()
+
+
+def obtener_rutas_documentos_abiertos(swapp):
+    """Devuelve las rutas normalizadas de los documentos abiertos por el usuario."""
+    # GetDocuments devuelve objetos COM; por eso se accede directamente y sin leer().
+    documentos = swapp.GetDocuments
+
+    # Algunas versiones lo entregan como método. Un CDispatch también es invocable,
+    # así que comprobamos _oleobj_ antes de llamar para no repetir aquel error.
+    if callable(documentos) and not hasattr(documentos, "_oleobj_"):
+        documentos = documentos()
+
+    if not documentos:
+        return set()
+
+    # Normalmente llega una tupla, pero envolvemos un único documento por seguridad.
+    if hasattr(documentos, "_oleobj_"):
+        documentos = (documentos,)
+
+    rutas = set()
+    for documento in documentos:
+        # GetPathName devuelve una cadena simple, así que aquí sí usamos leer().
+        ruta = leer(documento, "GetPathName")
+        if ruta:
+            rutas.add(normalizar_ruta(ruta))
+
+    return rutas
