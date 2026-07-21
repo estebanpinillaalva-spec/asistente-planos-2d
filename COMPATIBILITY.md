@@ -2,8 +2,14 @@
 
 ## Entorno pineado
 
-- **Versión de SolidWorks:** `RevisionNumber` = **31.2.1** (la serie 31 corresponde a SolidWorks 2023 — año comercial inferido, no leído de la API). **Esta es la versión pineada del proyecto.**
-- **Tipo de licencia y nota EULA (tarea 0.4):** (¿permite uso de API en proyectos personales? ¿restricciones comerciales?)
+- **Versión de SolidWorks:** **SOLIDWORKS 2023**, `RevisionNumber` = **31.2.1**. **Versión pineada del proyecto.** El año quedó **confirmado** (ya no inferido) por la ruta de instalación `C:\ProgramData\SOLIDWORKS\SOLIDWORKS 2023\`.
+- **Plantillas de dibujo de la familia:** `ig_2017_a2/a3/a4_-_iso.slddrt` (formatos de hoja de Ingeniería Gráfica, EPI Universidad de Vigo) en `Desktop\TFG DOCUMENTACION\Plantillas_TFG (1)`. Tres tamaños ⇒ el motor deberá elegir formato y escala según el tamaño de la pieza.
+- **Tipo de licencia (tarea 0.4, 2026-07-21): EDUCATIVA.** Confirmado por Esteban en *? → Acerca de SOLIDWORKS*.
+  - **Uso académico y personal: permitido.** Las fases 0-4 (estudio, aprendizaje y portfolio) no son uso comercial, así que el proyecto puede continuar tal cual.
+  - **Uso comercial: prohibido.** Afecta a la [Fase 5](ESTUDIO-Y-PLAN.md) vías B (consultoría) y C (producto): exigirían una licencia comercial propia o un programa de partners. Es problema del mes 6, no de ahora.
+  - **Uso de la API:** el condicionante es el *fin* (no comercial), no el mecanismo. Automatizar con pywin32 para aprender y para el portfolio encaja.
+  - **Marcado de archivos:** las licencias educativas suelen estampar *"SOLIDWORKS Educational Product. For Instructional Use Only"* en los planos. En los PNG exportados el 2026-07-21 **no apareció**; conviene comprobarlo en un PDF impreso antes de grabar los vídeos del portfolio.
+  - ⚠️ El texto vinculante es el `eula.rtf` instalado (`...\lang\spanish\eula.rtf`). No se ha leído íntegro: la extracción automática del RTF falló. **Releerlo antes de tomar cualquier decisión comercial.**
 - **Windows:** 11 Pro
 - **Python:** 3.14.4 (venv del proyecto en `.venv/`) · **pywin32:** 312 (wheel `cp314`)
 - **COM registrado:** `SldWorks.Application` presente en `HKLM:\SOFTWARE\Classes` ✅
