@@ -1,0 +1,140 @@
+# Tabla de agujeros de paso para tornillos métricos.
+# Este archivo está pensado para que una persona pueda revisarlo y editarlo.
+
+norma: "ISO 273:1979"
+titulo: "Agujeros de paso para tornillos"
+unidades: "mm"
+fecha_codificacion: "2026-07-21"
+
+# La norma ISO original es de pago. Estos datos se han contrastado con las
+# fuentes secundarias siguientes; las diferencias observadas se anotan abajo.
+aviso_fuentes: >-
+  La norma original es de pago. Los valores se han codificado a partir de
+  fuentes secundarias y se deben revisar contra la norma oficial si el uso lo
+  exige. Zhonghuan coincide con toda la tabla adoptada; Fractory sirve como
+  contraste independiente, pero publica algunas cifras diferentes.
+fuentes:
+  - nombre: "Fractory - Metric Clearance Hole Sizes"
+    url: "https://fractory.com/metric-bolt-clearance-hole-size-chart/"
+  - nombre: "Zhonghuan Tools - Bolt Clearance Hole Size Chart"
+    url: "https://www.zhonghuantools.com/en/resources/bolt-clearance-hole-chart"
+
+# La serie media es la opción de uso general y la que emplea Esteban.
+serie_por_defecto: "media"
+
+# Esteban indica H13 en sus planos para los agujeros de paso.
+grado_tolerancia_por_defecto: "H13"
+
+# Los valores adoptados se mantienen separados de su estado de verificación.
+# El bloque "verificacion" situado después de la tabla explica de qué fuentes
+# se dispone y conserva los valores discrepantes para que puedan auditarse.
+diametros:
+  M3:
+    fina: 3.2
+    media: 3.4
+    basta: 3.6
+  M4:
+    fina: 4.3
+    media: 4.5
+    basta: 4.8
+  M5:
+    fina: 5.3
+    media: 5.5
+    basta: 5.8
+  M6:
+    fina: 6.4
+    media: 6.6
+    basta: 7.0
+  M8:
+    fina: 8.4
+    media: 9.0
+    basta: 10.0
+  M10:
+    fina: 10.5
+    media: 11.0
+    basta: 12.0
+  M12:
+    fina: 13.0
+    media: 13.5
+    basta: 14.5
+  M14:
+    fina: 15.0
+    media: 15.5
+    basta: 16.5
+  M16:
+    fina: 17.0
+    media: 17.5
+    basta: 18.0
+  M18:
+    fina: 19.0
+    media: 20.0
+    basta: 21.0
+  M20:
+    fina: 21.0
+    media: 22.0
+    basta: 24.0
+  M22:
+    fina: 23.0
+    media: 24.0
+    basta: 26.0
+  M24:
+    fina: 25.0
+    media: 26.0
+    basta: 28.0
+
+# Estado comprobado el 2026-07-21 comparando Zhonghuan con Fractory.
+# "corroborado" significa que las dos fuentes publican los mismos tres valores.
+# "discrepante" conserva por serie el valor adoptado y el publicado por Fractory.
+# "sin_contraste" indica que esa métrica no aparece en la tabla de Fractory.
+verificacion:
+  M3:
+    estado: "discrepante"
+    discrepancias:
+      media:
+        adoptado: 3.4
+        fractory: 3.35
+  M4:
+    estado: "corroborado"
+  M5:
+    estado: "corroborado"
+  M6:
+    estado: "discrepante"
+    discrepancias:
+      media:
+        adoptado: 6.6
+        fractory: 6.5
+  M8:
+    estado: "corroborado"
+  M10:
+    estado: "corroborado"
+  M12:
+    estado: "discrepante"
+    discrepancias:
+      media:
+        adoptado: 13.5
+        fractory: 14.0
+      basta:
+        adoptado: 14.5
+        fractory: 15.0
+  M14:
+    estado: "sin_contraste"
+    fuente_disponible: "Zhonghuan"
+  M16:
+    estado: "discrepante"
+    discrepancias:
+      media:
+        adoptado: 17.5
+        fractory: 18.0
+      basta:
+        adoptado: 18.0
+        fractory: 19.0
+  M18:
+    estado: "sin_contraste"
+    fuente_disponible: "Zhonghuan"
+  M20:
+    estado: "corroborado"
+  M22:
+    estado: "sin_contraste"
+    fuente_disponible: "Zhonghuan"
+  M24:
+    estado: "corroborado"
