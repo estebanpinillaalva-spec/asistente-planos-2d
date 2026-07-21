@@ -4,8 +4,10 @@
 *.swBackUp
 *.bak
 
-# Modelos reales del banco de pruebas — pueden ser piezas confidenciales del trabajo.
-# Si en el futuro decides publicar alguna (pieza propia, sin IP de terceros), quita su exclusión.
+# Modelos del banco de pruebas. Se excluyen por PESO (binarios CAD que cambian
+# enteros en cada guardado), no por confidencialidad: son piezas de trabajos
+# universitarios de Esteban y no hay material confidencial. Los resultados
+# derivados (capturas, DXF, PDF) sí se pueden publicar en Fase 4.
 banco-de-pruebas/*
 !banco-de-pruebas/README.md
 
@@ -17,6 +19,7 @@ venv/
 
 # Salidas locales
 *.log
+notas/clasificacion-planas.csv
 
 # Biblioteca de conocimiento en Obsidian — copia descompuesta de los docs para
 # consultas con menos tokens. Privada por ahora; decidir en Fase 4 si se publica.

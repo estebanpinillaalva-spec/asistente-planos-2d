@@ -22,5 +22,10 @@
 | `IModelDoc2.GetTitle` | Nombre del documento activo | 0.5 | |
 | `IModelDoc2.GetPathName` | Ruta completa del documento | 0.5 | Vacío si el documento no se ha guardado nunca |
 | `IModelDoc2.GetType` | Tipo de documento | 0.5 | 1=pieza · 2=ensamblaje · 3=plano |
+| `ISldWorks.OpenDoc6` | Abrir una pieza en silencio para medirla | 0.2 | Devuelve errores/warnings por referencia |
+| `IPartDoc.GetPartBox` | Caja envolvente de la pieza | 0.2 | Devuelve 6 valores **en metros**: xmin,ymin,zmin,xmax,ymax,zmax |
+| `IPartDoc.GetBodies2` | Sólidos de la pieza | 0.2 | Solo como plan B si `GetPartBox` falla |
+| `IBody2.GetBodyBox` | Caja envolvente de un sólido | 0.2 | Plan B de `GetPartBox` |
+| `ISldWorks.CloseDoc` | Cerrar el documento tras medirlo | 0.2 | Imprescindible para no acumular piezas abiertas |
 
 > Conexión: `win32com.client.GetActiveObject("SldWorks.Application")` para engancharse a una instancia abierta; `Dispatch(...)` solo con `--iniciar`. Los errores se capturan como `pywintypes.com_error`.
