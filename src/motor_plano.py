@@ -66,9 +66,12 @@ ESCALAS = [
     {"texto": "1:10", "numerador": 1.0, "denominador": 10.0},
 ]
 
-# Espacio que se deja alrededor de las vistas, medido sobre el papel.
-MARGEN_LATERAL_MM = 15.0
-MARGEN_SUPERIOR_MM = 15.0
+# Margen de encuadernación: el marco de la plantilla está más adentro
+# por el lado izquierdo.
+MARGEN_IZQUIERDO_MM = 30.0
+MARGEN_DERECHO_MM = 20.0
+# El marco superior también está más adentro en estas plantillas.
+MARGEN_SUPERIOR_MM = 20.0
 BANDA_CAJETIN_MM = 65.0
 SEPARACION_VISTAS_MM = 12.0
 
@@ -170,7 +173,9 @@ def calcular_area_util(ancho_hoja_m, alto_hoja_m):
     """Calcula el rectángulo disponible tras descontar marco y cajetín."""
     ancho_hoja_mm = ancho_hoja_m * 1000.0
     alto_hoja_mm = alto_hoja_m * 1000.0
-    ancho_util_mm = ancho_hoja_mm - 2.0 * MARGEN_LATERAL_MM
+    ancho_util_mm = (
+        ancho_hoja_mm - MARGEN_IZQUIERDO_MM - MARGEN_DERECHO_MM
+    )
     alto_util_mm = alto_hoja_mm - BANDA_CAJETIN_MM - MARGEN_SUPERIOR_MM
     if ancho_util_mm <= 0 or alto_util_mm <= 0:
         raise ValueError(
@@ -180,11 +185,11 @@ def calcular_area_util(ancho_hoja_m, alto_hoja_m):
     return {
         "ancho_mm": ancho_util_mm,
         "alto_mm": alto_util_mm,
-        "izquierda_mm": MARGEN_LATERAL_MM,
+        "izquierda_mm": MARGEN_IZQUIERDO_MM,
         "inferior_mm": BANDA_CAJETIN_MM,
-        "derecha_mm": MARGEN_LATERAL_MM + ancho_util_mm,
+        "derecha_mm": MARGEN_IZQUIERDO_MM + ancho_util_mm,
         "superior_mm": BANDA_CAJETIN_MM + alto_util_mm,
-        "centro_x_mm": MARGEN_LATERAL_MM + ancho_util_mm / 2.0,
+        "centro_x_mm": MARGEN_IZQUIERDO_MM + ancho_util_mm / 2.0,
         "centro_y_mm": BANDA_CAJETIN_MM + alto_util_mm / 2.0,
     }
 
