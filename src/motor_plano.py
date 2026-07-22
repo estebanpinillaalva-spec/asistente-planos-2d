@@ -26,8 +26,8 @@ CARPETA_PLANTILLAS = Path(
     r"C:\Users\esteb\Desktop\TFG DOCUMENTACION\Plantillas_TFG (1)"
 )
 
-# Medidas observadas de los formatos, en metros, usadas solo para elegir hoja
-# y como alternativa. El .slddrt puede imponer otras medidas u orientación:
+# Medidas observadas de los formatos, en metros, usadas como estimación y
+# alternativa. El .slddrt puede imponer otras medidas u orientación:
 # la verdad será siempre lo que devuelva ISheet después de aplicarlo.
 ANCHO_A4_M = 0.210  # A4 vertical observado
 ALTO_A4_M = 0.297
@@ -36,7 +36,8 @@ ALTO_A3_M = 0.297  # A3 apaisado observado; pendiente de confirmar por API
 ANCHO_A2_M = 0.594
 ALTO_A2_M = 0.420  # A2 apaisado observado; pendiente de confirmar por API
 
-# Se mantiene el orden A4, A3 y A2 para elegir primero el formato menor.
+# A3 es el formato normal del proyecto. A4 y A2 se conservan únicamente para
+# poder forzarlos de forma puntual con la opción --formato.
 FORMATOS_HOJA = [
     {
         "nombre": "A4",
@@ -57,14 +58,27 @@ FORMATOS_HOJA = [
         "alto_m": ALTO_A2_M,
     },
 ]
+FORMATOS_POR_NOMBRE = {
+    formato["nombre"].casefold(): formato for formato in FORMATOS_HOJA
+}
+FORMATO_POR_DEFECTO = "a3"
 
-# Se respeta exactamente este orden de preferencia indicado en el plan.
-ESCALAS = [
+# Primero se prueban las escalas de reducción, de más legible a menos.
+ESCALAS_REDUCCION = [
     {"texto": "1:1", "numerador": 1.0, "denominador": 1.0},
     {"texto": "1:2", "numerador": 1.0, "denominador": 2.0},
     {"texto": "1:5", "numerador": 1.0, "denominador": 5.0},
     {"texto": "1:10", "numerador": 1.0, "denominador": 10.0},
+    {"texto": "1:20", "numerador": 1.0, "denominador": 20.0},
 ]
+ESCALAS_AMPLIACION = [
+    {"texto": "2:1", "numerador": 2.0, "denominador": 1.0},
+    {"texto": "5:1", "numerador": 5.0, "denominador": 1.0},
+    {"texto": "10:1", "numerador": 10.0, "denominador": 1.0},
+]
+# Para cada vista se prueba siempre de la mayor ampliación a la mayor
+# reducción y se conserva la primera escala que cabe.
+ESCALAS_NORMALIZADAS = list(reversed(ESCALAS_AMPLIACION)) + ESCALAS_REDUCCION
 
 # Margen de encuadernación: el marco de la plantilla está más adentro
 # por el lado izquierdo.
@@ -72,8 +86,17 @@ MARGEN_IZQUIERDO_MM = 30.0
 MARGEN_DERECHO_MM = 20.0
 # El marco superior también está más adentro en estas plantillas.
 MARGEN_SUPERIOR_MM = 20.0
-BANDA_CAJETIN_MM = 65.0
-SEPARACION_VISTAS_MM = 12.0
+BANDA_CAJETIN_MM = 70.0
+# El alzado se eleva ligeramente respecto al centro del espacio disponible.
+DESPLAZAMIENTO_VERTICAL_ALZADO = 0.08  # 8 % del alto útil.
+
+# Maqueta fija preparada para tres vistas: alzado a la izquierda e isométrica
+# arriba a la derecha. La fila inferior derecha se reserva para la sección.
+PROPORCION_COLUMNA_ALZADO = 0.55
+PROPORCION_COLUMNA_DERECHA = 0.45
+PROPORCION_FILA_DERECHA = 0.50
+# Cada vista solo puede usar el 90 % de su celda.
+MARGEN_SEGURIDAD_CELDA = 0.10
 
 # La isométrica se aproxima como un cuadrado. Este factor se podrá ajustar
 # cuando comparemos la estimación con más planos generados.
@@ -100,8 +123,10 @@ PREFERENCIAS_BOOLEANAS_ANOTACIONES = [
     ("swDetailingConnectionLinesHolePatternsCenterMarks", 599),
     ("swDetailingCenterMarkScaleByViewScale", 613),
 ]
+# Esta es la única preferencia doble que modifica el motor. Como representa
+# una longitud, SolidWorks espera metros aunque la opción de usuario use mm.
 PREFERENCIA_TAMANO_MARCA_CENTRO = 12
-TAMANO_MARCA_CENTRO_M = 0.0015  # 1,5 mm sobre el plano.
+TAMANO_MARCA_CENTRO_MM_POR_DEFECTO = 2.0
 VERSION_GUARDADO_ACTUAL = 0
 OPCION_GUARDAR_SILENCIOSO = 1
 
@@ -151,19 +176,36 @@ def _obtener_caja(pieza):
             ) from error_alternativo
 
 
-def dimensiones_pieza(pieza):
-    """Devuelve espesor, dimensión media y largo de la pieza en milímetros."""
+def medir_pieza_y_elegir_alzado(pieza):
+    """Mide la pieza y elige la vista estándar que muestra su cara grande."""
     xmin, ymin, zmin, xmax, ymax, zmax = _obtener_caja(pieza)
-    dimensiones = sorted(
-        [
-            abs(xmax - xmin) * 1000.0,
-            abs(ymax - ymin) * 1000.0,
-            abs(zmax - zmin) * 1000.0,
-        ]
-    )
+    extensiones = {
+        "X": abs(xmax - xmin) * 1000.0,
+        "Y": abs(ymax - ymin) * 1000.0,
+        "Z": abs(zmax - zmin) * 1000.0,
+    }
+    dimensiones = sorted(extensiones.values())
     if dimensiones[0] <= 0:
         raise ValueError("la caja envolvente tiene una dimensión igual a cero")
-    return tuple(dimensiones)
+
+    # En una placa, el eje de la extensión menor es perpendicular a su cara
+    # grande. Por eso Z pide la vista frontal, Y la superior y X la derecha.
+    # Se conserva además el orden de tamaños: las otras dos extensiones son
+    # las que determinan cuánto ocupa el alzado sobre el papel.
+    eje_espesor = min(extensiones, key=extensiones.get)
+    vista_por_eje = {
+        "Z": "frontal",
+        "Y": "superior",
+        "X": "derecha",
+    }
+    espesor, medio, largo = dimensiones
+    return espesor, medio, largo, vista_por_eje[eje_espesor], eje_espesor
+
+
+def dimensiones_pieza(pieza):
+    """Devuelve espesor, dimensión media y largo de la pieza en milímetros."""
+    espesor, medio, largo, _, _ = medir_pieza_y_elegir_alzado(pieza)
+    return espesor, medio, largo
 
 
 def calcular_tamanos_vistas(largo_mm, medio_mm, escala):
@@ -249,75 +291,79 @@ def verificar_rectangulos_en_area(area, rectangulos):
             )
 
 
-def calcular_disposicion(ancho_hoja_m, alto_hoja_m, tamanos):
-    """Coloca la isométrica arriba a la izquierda y el alzado donde quepa."""
-    area = calcular_area_util(ancho_hoja_m, alto_hoja_m)
-    alzado = tamanos["alzado"]
-    isometrica = tamanos["isometrica"]
-
-    # La isométrica siempre queda pegada a la esquina superior izquierda del
-    # área útil. CreateDrawViewFromModelView3 recibe el centro de la vista.
-    coordenadas_isometrica_mm = (
-        area["izquierda_mm"] + isometrica["ancho_mm"] / 2.0,
-        area["superior_mm"] - isometrica["alto_mm"] / 2.0,
-    )
-    borde_derecho_isometrica = (
-        area["izquierda_mm"] + isometrica["ancho_mm"]
-    )
-    inicio_franja_derecha = borde_derecho_isometrica + SEPARACION_VISTAS_MM
-    ancho_franja_derecha = area["derecha_mm"] - inicio_franja_derecha
-    cabe_a_la_derecha = (
-        alzado["ancho_mm"] <= ancho_franja_derecha
-        and alzado["alto_mm"] <= area["alto_mm"]
-    )
-
-    borde_inferior_isometrica = (
-        area["superior_mm"] - isometrica["alto_mm"]
-    )
-    fin_franja_inferior = borde_inferior_isometrica - SEPARACION_VISTAS_MM
-    alto_franja_inferior = fin_franja_inferior - area["inferior_mm"]
-    cabe_debajo = (
-        alzado["ancho_mm"] <= area["ancho_mm"]
-        and alzado["alto_mm"] <= alto_franja_inferior
-    )
-
-    if cabe_a_la_derecha:
-        coordenadas_alzado_mm = (
-            inicio_franja_derecha + ancho_franja_derecha / 2.0,
-            area["centro_y_mm"],
-        )
-        tipo = "alzado a la derecha"
-    elif cabe_debajo:
-        coordenadas_alzado_mm = (
-            area["centro_x_mm"],
-            area["inferior_mm"] + alto_franja_inferior / 2.0,
-        )
-        tipo = "alzado debajo"
-    else:
-        raise ValueError(
-            "las vistas no caben: "
-            f"hoja={ancho_hoja_m * 1000.0:.1f} x "
-            f"{alto_hoja_m * 1000.0:.1f} mm; "
-            f"área útil={area['ancho_mm']:.1f} x {area['alto_mm']:.1f} mm; "
-            f"alzado={alzado['ancho_mm']:.1f} x {alzado['alto_mm']:.1f} mm; "
-            f"isométrica={isometrica['ancho_mm']:.1f} x "
-            f"{isometrica['alto_mm']:.1f} mm; no cabe ni a la derecha "
-            "ni debajo de la isométrica"
-        )
-
-    rectangulos = {
-        "alzado": calcular_rectangulo_vista(coordenadas_alzado_mm, alzado),
-        "isometrica": calcular_rectangulo_vista(
-            coordenadas_isometrica_mm, isometrica
-        ),
-    }
-    # Esta comprobación se repite también al recalcular con la hoja real,
-    # justo antes de que el flujo llegue a insertar las vistas.
-    verificar_rectangulos_en_area(area, rectangulos)
+def calcular_celdas(area):
+    """Divide el área útil en la maqueta fija de alzado, iso y sección."""
+    ancho_alzado = area["ancho_mm"] * PROPORCION_COLUMNA_ALZADO
+    ancho_derecha = area["ancho_mm"] * PROPORCION_COLUMNA_DERECHA
+    alto_fila = area["alto_mm"] * PROPORCION_FILA_DERECHA
+    division_x = area["izquierda_mm"] + ancho_alzado
+    division_y = area["inferior_mm"] + alto_fila
 
     return {
-        "tipo": tipo,
+        "alzado": {
+            "ancho_mm": ancho_alzado,
+            "alto_mm": area["alto_mm"],
+            "izquierda_mm": area["izquierda_mm"],
+            "derecha_mm": division_x,
+            "inferior_mm": area["inferior_mm"],
+            "superior_mm": area["superior_mm"],
+        },
+        "isometrica": {
+            "ancho_mm": ancho_derecha,
+            "alto_mm": alto_fila,
+            "izquierda_mm": division_x,
+            "derecha_mm": area["derecha_mm"],
+            "inferior_mm": division_y,
+            "superior_mm": area["superior_mm"],
+        },
+        # Esta celda se deja vacía a propósito: está reservada para la futura
+        # sección y no debe ocuparse con ninguna otra vista.
+        "seccion_reservada": {
+            "ancho_mm": ancho_derecha,
+            "alto_mm": alto_fila,
+            "izquierda_mm": division_x,
+            "derecha_mm": area["derecha_mm"],
+            "inferior_mm": area["inferior_mm"],
+            "superior_mm": division_y,
+        },
+    }
+
+
+def _centro_celda(celda):
+    """Devuelve el centro de una celda en milímetros de hoja."""
+    return (
+        (celda["izquierda_mm"] + celda["derecha_mm"]) / 2.0,
+        (celda["inferior_mm"] + celda["superior_mm"]) / 2.0,
+    )
+
+
+def calcular_disposicion(ancho_hoja_m, alto_hoja_m, tamanos):
+    """Centra alzado e isométrica en sus celdas fijas."""
+    area = calcular_area_util(ancho_hoja_m, alto_hoja_m)
+    celdas = calcular_celdas(area)
+    centro_alzado = _centro_celda(celdas["alzado"])
+    centro_isometrica = _centro_celda(celdas["isometrica"])
+
+    coordenadas_alzado_mm = (
+        centro_alzado[0],
+        centro_alzado[1]
+        + DESPLAZAMIENTO_VERTICAL_ALZADO * area["alto_mm"],
+    )
+    coordenadas_isometrica_mm = centro_isometrica
+
+    rectangulos = {
+        "alzado": calcular_rectangulo_vista(
+            coordenadas_alzado_mm, tamanos["alzado"]
+        ),
+        "isometrica": calcular_rectangulo_vista(
+            coordenadas_isometrica_mm, tamanos["isometrica"]
+        ),
+    }
+
+    return {
+        "tipo": "maqueta fija: alzado izquierda, isométrica arriba derecha",
         "area_util": area,
+        "celdas": celdas,
         "tamanos": tamanos,
         "rectangulos": rectangulos,
         "coordenadas_alzado_m": tuple(
@@ -329,26 +375,117 @@ def calcular_disposicion(ancho_hoja_m, alto_hoja_m, tamanos):
     }
 
 
-def elegir_formato_y_escala(largo_mm, medio_mm):
-    """Elige la primera hoja y escala donde quepan las dos vistas."""
-    ultimo_error = None
-    # Prima la legibilidad: se agranda la hoja antes de reducir la escala.
-    for escala in ESCALAS:
-        for formato in FORMATOS_HOJA:
-            tamanos = calcular_tamanos_vistas(largo_mm, medio_mm, escala)
-            try:
-                disposicion = calcular_disposicion(
-                    formato["ancho_m"], formato["alto_m"], tamanos
-                )
-                return formato, escala, disposicion
-            except ValueError as error:
-                ultimo_error = error
+def _limites_seguros(celda):
+    """Reduce una celda un 10 % total para dejar aire alrededor de la vista."""
+    margen_x = celda["ancho_mm"] * MARGEN_SEGURIDAD_CELDA / 2.0
+    margen_y = celda["alto_mm"] * MARGEN_SEGURIDAD_CELDA / 2.0
+    return {
+        "izquierda_mm": celda["izquierda_mm"] + margen_x,
+        "derecha_mm": celda["derecha_mm"] - margen_x,
+        "inferior_mm": celda["inferior_mm"] + margen_y,
+        "superior_mm": celda["superior_mm"] - margen_y,
+    }
 
-    raise ValueError(
-        "la pieza no cabe ni en A2 con las escalas permitidas; "
-        f"dimensiones principales={largo_mm:.1f} x {medio_mm:.1f} mm; "
-        f"{ultimo_error}"
+
+def comprobar_cabida_vista(disposicion, nombre):
+    """Comprueba con aritmética una vista contra su propia celda segura."""
+    excesos = []
+    rectangulo = disposicion["rectangulos"][nombre]
+    limites = _limites_seguros(disposicion["celdas"][nombre])
+    nombre_visible = "isométrica" if nombre == "isometrica" else nombre
+    comparaciones = (
+        ("izquierda", limites["izquierda_mm"] - rectangulo["izquierda_mm"]),
+        ("derecha", rectangulo["derecha_mm"] - limites["derecha_mm"]),
+        ("abajo", limites["inferior_mm"] - rectangulo["inferior_mm"]),
+        ("arriba", rectangulo["superior_mm"] - limites["superior_mm"]),
     )
+    for direccion, exceso in comparaciones:
+        if exceso > 0.000001:
+            excesos.append(
+                f"{nombre_visible} se pasa {exceso:.1f} mm por {direccion}"
+            )
+    return not excesos, excesos
+
+
+def _elegir_escala_para_vista(
+    largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m, nombre_vista
+):
+    """Elige la mayor escala normalizada que cabe para una sola vista."""
+    ultimo_intento = None
+    for escala in ESCALAS_NORMALIZADAS:
+        tamanos = calcular_tamanos_vistas(largo_mm, medio_mm, escala)
+        disposicion = calcular_disposicion(
+            ancho_hoja_m, alto_hoja_m, tamanos
+        )
+        cabe, excesos = comprobar_cabida_vista(disposicion, nombre_vista)
+        ultimo_intento = (escala, excesos)
+        if cabe:
+            return escala, None
+
+    escala, excesos = ultimo_intento
+    nombre_visible = (
+        "la isométrica" if nombre_vista == "isometrica" else "el alzado"
+    )
+    aviso = (
+        f"{nombre_visible} no cabe ni a 1:20; se guardará igualmente. "
+        + "; ".join(excesos)
+    )
+    return escala, aviso
+
+
+def elegir_escalas_independientes(
+    largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m
+):
+    """Elige por separado la escala del alzado y la de la isométrica."""
+    # La escala del plano y del cajetín la manda el alzado. La isométrica es
+    # ilustrativa y puede reducirse de forma independiente para usar su celda.
+    escala_alzado, aviso_alzado = _elegir_escala_para_vista(
+        largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m, "alzado"
+    )
+    escala_isometrica, aviso_isometrica = _elegir_escala_para_vista(
+        largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m, "isometrica"
+    )
+
+    tamanos_alzado = calcular_tamanos_vistas(
+        largo_mm, medio_mm, escala_alzado
+    )
+    tamanos_isometrica = calcular_tamanos_vistas(
+        largo_mm, medio_mm, escala_isometrica
+    )
+    tamanos = {
+        "alzado": tamanos_alzado["alzado"],
+        "isometrica": tamanos_isometrica["isometrica"],
+    }
+    disposicion = calcular_disposicion(
+        ancho_hoja_m, alto_hoja_m, tamanos
+    )
+    ocupacion = (
+        tamanos["alzado"]["ancho_mm"]
+        / disposicion["celdas"]["alzado"]["ancho_mm"]
+        * 100.0
+    )
+    avisos = [
+        aviso
+        for aviso in (aviso_alzado, aviso_isometrica)
+        if aviso is not None
+    ]
+    return (
+        escala_alzado,
+        escala_isometrica,
+        disposicion,
+        ocupacion,
+        avisos,
+    )
+
+
+def obtener_formato(nombre):
+    """Devuelve A3 por defecto o el formato forzado por línea de comandos."""
+    try:
+        return FORMATOS_POR_NOMBRE[str(nombre).casefold()]
+    except KeyError as error:
+        raise ValueError(
+            "el valor de --formato debe ser a3, a4 o a2"
+        ) from error
 
 
 def buscar_piezas(entradas):
@@ -381,22 +518,17 @@ def buscar_piezas(entradas):
     return sorted(piezas, key=lambda ruta: str(ruta).casefold())
 
 
-def validar_plantillas():
-    """Comprueba que existen la carpeta y los tres formatos de la escuela."""
+def validar_plantillas(formato):
+    """Comprueba que existen la carpeta y el formato que se va a usar."""
     if not CARPETA_PLANTILLAS.is_dir():
         print("No se encontró la carpeta de plantillas de la escuela:")
         print(f"  {CARPETA_PLANTILLAS}")
         return False
 
-    faltantes = [
-        formato["archivo"]
-        for formato in FORMATOS_HOJA
-        if not (CARPETA_PLANTILLAS / formato["archivo"]).is_file()
-    ]
-    if faltantes:
-        print("Faltan formatos de hoja en la carpeta de plantillas:")
-        for nombre in faltantes:
-            print(f"  {nombre}")
+    ruta_formato = CARPETA_PLANTILLAS / formato["archivo"]
+    if not ruta_formato.is_file():
+        print("Falta el formato de hoja seleccionado:")
+        print(f"  {ruta_formato}")
         return False
 
     return True
@@ -409,8 +541,8 @@ def texto_error(error):
     return f"{type(error).__name__}: {error}"
 
 
-def aplicar_preferencias_anotaciones(plano):
-    """Activa marcas y ejes, guardando cada valor original que modifica."""
+def guardar_preferencias_y_desactivar_anotaciones(plano):
+    """Guarda los originales y deja limpia la futura vista isométrica."""
     cambios = []
     avisos = []
     try:
@@ -433,7 +565,7 @@ def aplicar_preferencias_anotaciones(plano):
             correcto = extension.SetUserPreferenceToggle(
                 identificador,
                 OPCION_DETALLADO_SIN_ESPECIFICAR,
-                True,
+                False,
             )
             if correcto is False:
                 raise RuntimeError("SolidWorks devolvió False")
@@ -443,7 +575,7 @@ def aplicar_preferencias_anotaciones(plano):
                     "nombre": nombre,
                     "identificador": identificador,
                     "original": original,
-                    "nuevo": True,
+                    "nuevo": False,
                 }
             )
         except Exception as error:
@@ -459,20 +591,13 @@ def aplicar_preferencias_anotaciones(plano):
                 OPCION_DETALLADO_SIN_ESPECIFICAR,
             )
         )
-        correcto = extension.SetUserPreferenceDouble(
-            PREFERENCIA_TAMANO_MARCA_CENTRO,
-            OPCION_DETALLADO_SIN_ESPECIFICAR,
-            TAMANO_MARCA_CENTRO_M,
-        )
-        if correcto is False:
-            raise RuntimeError("SolidWorks devolvió False")
         cambios.append(
             {
                 "tipo": "doble",
                 "nombre": "swDetailingCenterMarkSize",
                 "identificador": PREFERENCIA_TAMANO_MARCA_CENTRO,
                 "original": original,
-                "nuevo": TAMANO_MARCA_CENTRO_M,
+                "nuevo": original,
             }
         )
     except Exception as error:
@@ -482,6 +607,47 @@ def aplicar_preferencias_anotaciones(plano):
         )
 
     return extension, cambios, avisos
+
+
+def aplicar_preferencias_alzado(
+    extension, cambios, marca_centro_mm, escalar_marcas
+):
+    """Activa marcas y ejes solo para crear el alzado."""
+    avisos = []
+    if extension is None:
+        return avisos
+
+    for cambio in cambios:
+        try:
+            if cambio["tipo"] == "booleano":
+                if cambio["identificador"] == 613:
+                    nuevo = escalar_marcas
+                else:
+                    nuevo = True
+                correcto = extension.SetUserPreferenceToggle(
+                    cambio["identificador"],
+                    OPCION_DETALLADO_SIN_ESPECIFICAR,
+                    nuevo,
+                )
+            else:
+                # Las longitudes de la API de SolidWorks se expresan en
+                # metros: 2 mm, por ejemplo, deben enviarse como 0.002 m.
+                marca_centro_m = marca_centro_mm / 1000.0
+                nuevo = marca_centro_m
+                correcto = extension.SetUserPreferenceDouble(
+                    cambio["identificador"],
+                    OPCION_DETALLADO_SIN_ESPECIFICAR,
+                    nuevo,
+                )
+            if correcto is False:
+                raise RuntimeError("SolidWorks devolvió False")
+            cambio["nuevo"] = nuevo
+        except Exception as error:
+            avisos.append(
+                f"no se pudo aplicar {cambio['nombre']} "
+                f"({cambio['identificador']}): {texto_error(error)}"
+            )
+    return avisos
 
 
 def restaurar_preferencias_anotaciones(extension, cambios):
@@ -589,7 +755,7 @@ def _normalizar_nombre_vista(nombre):
 
 
 def seleccionar_nombre_vista(nombres_disponibles, tipo_vista):
-    """Encuentra el nombre real del alzado o de la isométrica."""
+    """Encuentra el nombre real de una vista estándar o de la isométrica."""
     nombres = [str(nombre) for nombre in (nombres_disponibles or [])]
     if not nombres:
         return None
@@ -597,9 +763,12 @@ def seleccionar_nombre_vista(nombres_disponibles, tipo_vista):
     # Los nombres de vista de SolidWorks se traducen según el idioma de la
     # instalación. Nunca deben escribirse a mano: hay que obtenerlos con
     # IModelDoc2.GetModelViewNames() y emparejarlos de forma flexible.
-    # En esta instalación en español, el alzado se llama "*Frontal".
+    # Para mostrar la cara de una placa pueden hacer falta Frontal, Superior
+    # o Derecha, según el eje en el que esté su espesor.
     aceptados = {
-        "alzado": {"front", "frontal", "alzado"},
+        "frontal": {"front", "frontal", "alzado"},
+        "superior": {"top", "superior"},
+        "derecha": {"right", "derecha"},
         "isometrica": {"isometric", "isometrica"},
     }
     for nombre in nombres:
@@ -733,7 +902,7 @@ def imprimir_diagnostico(
         ruta_modelo == ruta_abierta for _, ruta_abierta in datos_documentos
     )
 
-    print("  --- DIAGNÓSTICO COM ANTES DE CREAR VISTAS ---")
+    print("  --- DIAGNÓSTICO COM ANTES DE CREAR EL ALZADO ---")
     print(f"  Nombres de vista reales: {nombres_vistas}")
     print(f"  Documento activo: {titulo_activo}")
     print(
@@ -840,12 +1009,17 @@ def crear_vista_localizada(plano, pieza, ruta_modelo, tipo_vista, x, y):
     nombres_disponibles = obtener_nombres_vistas_modelo(pieza)
     nombre_real = seleccionar_nombre_vista(nombres_disponibles, tipo_vista)
 
-    if nombre_real is not None:
-        candidatos = [nombre_real]
-    elif tipo_vista == "alzado":
-        candidatos = ["*Front", "*Alzado"]
-    else:
-        candidatos = ["*Isometric", "*Isométrica"]
+    candidatos_por_tipo = {
+        "frontal": ["*Front", "*Frontal", "*Alzado"],
+        "superior": ["*Top", "*Superior"],
+        "derecha": ["*Right", "*Derecha"],
+        "isometrica": ["*Isometric", "*Isométrica"],
+    }
+    candidatos = (
+        [nombre_real]
+        if nombre_real is not None
+        else candidatos_por_tipo[tipo_vista]
+    )
 
     intentos = []
     for nombre in candidatos:
@@ -874,6 +1048,15 @@ def crear_vista_localizada(plano, pieza, ruta_modelo, tipo_vista, x, y):
     raise RuntimeError("; ".join(intentos))
 
 
+def aplicar_escala_isometrica(vista, escala):
+    """Independiza la isométrica de la hoja y le asigna su propia escala."""
+    # En la API 2023, UseSheetScale es 0 cuando la escala es independiente.
+    # Se usa ScaleDecimal porque acepta un número simple y es más fiable con
+    # enlace tardío que ScaleRatio, que obliga a transferir un array por COM.
+    vista.UseSheetScale = 0
+    vista.ScaleDecimal = escala["numerador"] / escala["denominador"]
+
+
 def guardar_plano(plano, ruta_salida):
     """Guarda el plano con la vía comprobada en SolidWorks 2023."""
     # IModelDocExtension.SaveAs falla en esta instalación con enlace tardío
@@ -895,15 +1078,29 @@ def _registrar_fallo(resultado, mensaje):
     )
 
 
-def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
+def procesar_pieza(
+    swapp,
+    ruta,
+    rutas_abiertas_antes,
+    diagnostico=False,
+    marca_centro_mm=TAMANO_MARCA_CENTRO_MM_POR_DEFECTO,
+    escalar_marcas=True,
+    formato=None,
+):
     """Genera y guarda el plano de una pieza sin propagar sus errores."""
     resultado = {
         "archivo": ruta.name,
         "hoja": "-",
         "escala": "-",
+        "escala_isometrica": "-",
         "vistas": 0,
         "nombres_vista": [],
         "metodos_vista": [],
+        "alzado_elegido": "-",
+        "eje_espesor": "-",
+        "ocupacion_alzado": 0.0,
+        "marca_centro_mm": marca_centro_mm,
+        "escalar_marcas": escalar_marcas,
         "correcto": False,
         "avisos": [],
         "error": "",
@@ -921,6 +1118,8 @@ def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
     ruta_salida = CARPETA_SALIDA / f"{ruta.stem}.SLDDRW"
 
     try:
+        if formato is None:
+            formato = obtener_formato(FORMATO_POR_DEFECTO)
         pieza_ya_abierta = normalizar_ruta(ruta) in rutas_abiertas_antes
         if normalizar_ruta(ruta_salida) in rutas_abiertas_antes:
             raise RuntimeError(
@@ -941,10 +1140,23 @@ def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
                 f"OpenDoc6: errores={errores}, avisos={avisos}"
             )
 
-        espesor, medio, largo = dimensiones_pieza(pieza)
-        formato, escala, _ = elegir_formato_y_escala(largo, medio)
+        (
+            espesor,
+            medio,
+            largo,
+            tipo_vista_alzado,
+            eje_espesor,
+        ) = medir_pieza_y_elegir_alzado(pieza)
+        resultado["eje_espesor"] = eje_espesor
+        # La primera estimación permite aplicar ya una escala razonable al
+        # crear la hoja. Después se repite con el tamaño real leído de la API.
+        escala, _, _, _, _ = elegir_escalas_independientes(
+            largo,
+            medio,
+            formato["ancho_m"],
+            formato["alto_m"],
+        )
         resultado["hoja"] = formato["nombre"]
-        resultado["escala"] = escala["texto"]
 
         plantilla_dibujo = obtener_plantilla_dibujo(swapp)
         # NewDocument devuelve IModelDoc2: se accede directamente, sin leer().
@@ -974,24 +1186,38 @@ def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
             resultado["avisos"].append(aviso_tamano)
             print(f"AVISO: {aviso_tamano}")
 
-        # La selección inicial usa las medidas declaradas. Aquí se repite el
-        # cálculo con la medida real que impuso el formato .slddrt.
-        tamanos_vistas = calcular_tamanos_vistas(largo, medio, escala)
-        disposicion = calcular_disposicion(
-            ancho_m,
-            alto_m,
-            tamanos_vistas,
+        # La escala definitiva se decide con la medida real que impuso el
+        # formato .slddrt. Si cambia, se vuelve a aplicar a la misma hoja.
+        (
+            escala_real,
+            escala_isometrica,
+            disposicion,
+            ocupacion,
+            avisos_escala,
+        ) = elegir_escalas_independientes(
+            largo, medio, ancho_m, alto_m
         )
+        if escala_real["texto"] != escala["texto"]:
+            escala = escala_real
+            configurar_hoja(plano, formato, escala)
+        else:
+            escala = escala_real
+        resultado["escala"] = escala["texto"]
+        resultado["escala_isometrica"] = escala_isometrica["texto"]
+        resultado["ocupacion_alzado"] = ocupacion
+        for aviso_escala in avisos_escala:
+            resultado["avisos"].append(aviso_escala)
+            print(f"AVISO: {aviso_escala}")
         coordenadas_alzado = disposicion["coordenadas_alzado_m"]
         coordenadas_isometrica = disposicion["coordenadas_isometrica_m"]
 
-        # Estas opciones pertenecen al documento de plano. Se activan solo
-        # durante la creación de las vistas y se restauran antes de guardar.
+        # La isométrica debe quedar limpia. Primero se guardan los valores del
+        # documento y se desactivan las anotaciones automáticas.
         (
             extension_anotaciones,
             cambios_anotaciones,
             avisos_preferencias,
-        ) = aplicar_preferencias_anotaciones(plano)
+        ) = guardar_preferencias_y_desactivar_anotaciones(plano)
         preferencias_anotaciones_pendientes = bool(cambios_anotaciones)
         for aviso in avisos_preferencias:
             resultado["avisos"].append(aviso)
@@ -1006,6 +1232,53 @@ def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
             resultado["avisos"].append(
                 f"{metodo_activacion}: código={codigo_activacion}"
             )
+
+        # SolidWorks puede cambiar la escala al insertar la primera vista.
+        # Desactivamos esa preferencia solo durante estas dos inserciones.
+        autoescala_original = bool(
+            swapp.GetUserPreferenceToggle(PREFERENCIA_AUTOESCALA_VISTAS)
+        )
+        # SetUserPreferenceToggle es un procedimiento COM: si funciona no
+        # devuelve True, sino None. Un fallo real llega como excepción.
+        swapp.SetUserPreferenceToggle(PREFERENCIA_AUTOESCALA_VISTAS, False)
+        autoescala_modificada = True
+
+        # La isométrica se crea primero, mientras marcas y ejes están
+        # desactivados. Así queda limpia sin inspeccionar ni mover IView.
+        vista_isometrica, nombre_isometrica, metodo_isometrica = (
+            crear_vista_localizada(
+                plano,
+                pieza,
+                ruta_modelo,
+                "isometrica",
+                coordenadas_isometrica[0],
+                coordenadas_isometrica[1],
+            )
+        )
+        aplicar_escala_isometrica(vista_isometrica, escala_isometrica)
+        # Cambiar la escala modifica los gráficos. ForceRebuild3 ya está
+        # comprobado en este motor y actualiza la vista antes de guardar.
+        plano.ForceRebuild3(False)
+        resultado["vistas"] += 1
+        resultado["nombres_vista"].append(nombre_isometrica)
+        resultado["metodos_vista"].append(metodo_isometrica)
+        if diagnostico:
+            print(
+                f"  Vista isométrica creada con {metodo_isometrica}: "
+                f"{nombre_isometrica}; escala independiente "
+                f"{escala_isometrica['texto']}"
+            )
+
+        # Solo ahora se activan las marcas de centro y las líneas de eje.
+        avisos_preferencias = aplicar_preferencias_alzado(
+            extension_anotaciones,
+            cambios_anotaciones,
+            marca_centro_mm,
+            escalar_marcas,
+        )
+        for aviso in avisos_preferencias:
+            resultado["avisos"].append(aviso)
+            print(f"AVISO: {aviso}")
 
         if diagnostico:
             imprimir_diagnostico(
@@ -1024,48 +1297,22 @@ def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
                 cambios_anotaciones,
             )
 
-        # SolidWorks puede cambiar la escala al insertar la primera vista.
-        # Desactivamos esa preferencia solo durante estas dos inserciones.
-        autoescala_original = bool(
-            swapp.GetUserPreferenceToggle(PREFERENCIA_AUTOESCALA_VISTAS)
-        )
-        # SetUserPreferenceToggle es un procedimiento COM: si funciona no
-        # devuelve True, sino None. Un fallo real llega como excepción.
-        swapp.SetUserPreferenceToggle(PREFERENCIA_AUTOESCALA_VISTAS, False)
-        autoescala_modificada = True
-
         _, nombre_alzado, metodo_alzado = crear_vista_localizada(
             plano,
             pieza,
             ruta_modelo,
-            "alzado",
+            tipo_vista_alzado,
             coordenadas_alzado[0],
             coordenadas_alzado[1],
         )
         resultado["vistas"] += 1
         resultado["nombres_vista"].append(nombre_alzado)
         resultado["metodos_vista"].append(metodo_alzado)
+        resultado["alzado_elegido"] = nombre_alzado
         if diagnostico:
             print(
                 f"  Vista alzado creada con {metodo_alzado}: "
                 f"{nombre_alzado}"
-            )
-
-        _, nombre_isometrica, metodo_isometrica = crear_vista_localizada(
-            plano,
-            pieza,
-            ruta_modelo,
-            "isometrica",
-            coordenadas_isometrica[0],
-            coordenadas_isometrica[1],
-        )
-        resultado["vistas"] += 1
-        resultado["nombres_vista"].append(nombre_isometrica)
-        resultado["metodos_vista"].append(metodo_isometrica)
-        if diagnostico:
-            print(
-                f"  Vista isométrica creada con {metodo_isometrica}: "
-                f"{nombre_isometrica}"
             )
 
         avisos_restauracion = restaurar_preferencias_anotaciones(
@@ -1136,8 +1383,15 @@ def imprimir_resultado(resultado):
     nombres = ",".join(resultado["nombres_vista"]) or "-"
     print(
         f"{estado} | {resultado['archivo']} | hoja={resultado['hoja']} | "
-        f"escala={resultado['escala']} | vistas={resultado['vistas']} | "
-        f"nombres={nombres}"
+        f"escala-alzado={resultado['escala']} | "
+        f"escala-isométrica={resultado['escala_isometrica']} | "
+        f"ocupación-alzado={resultado['ocupacion_alzado']:.1f}% | "
+        f"vistas={resultado['vistas']} | "
+        f"nombres={nombres} | "
+        f"alzado={resultado['alzado_elegido']} "
+        f"(espesor en {resultado['eje_espesor']}) | "
+        f"marca-centro={resultado['marca_centro_mm']:g} mm "
+        f"({resultado['marca_centro_mm'] / 1000.0:g} m enviados a la API)"
     )
     if resultado["error"]:
         print(f"  Error: {resultado['error']}")
@@ -1148,21 +1402,60 @@ def imprimir_resultado(resultado):
 def mostrar_uso():
     """Explica las entradas aceptadas por el script."""
     print(
-        "Uso: motor_plano.py [--diagnostico] <pieza.SLDPRT o carpeta> "
+        "Uso: motor_plano.py [--diagnostico] [--marca-centro <mm>] "
+        "[--sin-escalar-marcas] [--formato a3|a4|a2] "
+        "<pieza.SLDPRT o carpeta> "
         "[otra pieza o carpeta ...]"
     )
 
 
 def analizar_argumentos(argumentos):
-    """Separa la opción de diagnóstico de las rutas de entrada."""
+    """Separa las opciones de diagnóstico, formato y marcas de las rutas."""
     diagnostico = False
+    marca_centro_mm = TAMANO_MARCA_CENTRO_MM_POR_DEFECTO
+    escalar_marcas = True
+    nombre_formato = FORMATO_POR_DEFECTO
     rutas = []
-    for argumento in argumentos:
+    indice = 0
+    while indice < len(argumentos):
+        argumento = argumentos[indice]
         if argumento == "--diagnostico":
             diagnostico = True
+        elif argumento == "--sin-escalar-marcas":
+            escalar_marcas = False
+        elif argumento == "--marca-centro":
+            indice += 1
+            if indice >= len(argumentos):
+                raise ValueError("falta el valor en milímetros de --marca-centro")
+            texto_valor = argumentos[indice].replace(",", ".")
+            try:
+                marca_centro_mm = float(texto_valor)
+            except ValueError as error:
+                raise ValueError(
+                    "el valor de --marca-centro debe ser un número decimal"
+                ) from error
+            if marca_centro_mm <= 0:
+                raise ValueError(
+                    "el valor de --marca-centro debe ser mayor que cero"
+                )
+        elif argumento == "--formato":
+            indice += 1
+            if indice >= len(argumentos):
+                raise ValueError("falta el valor de --formato: a3, a4 o a2")
+            nombre_formato = argumentos[indice].casefold()
+            obtener_formato(nombre_formato)
+        elif argumento.startswith("--"):
+            raise ValueError(f"opción desconocida: {argumento}")
         else:
             rutas.append(argumento)
-    return diagnostico, rutas
+        indice += 1
+    return (
+        diagnostico,
+        rutas,
+        marca_centro_mm,
+        escalar_marcas,
+        nombre_formato,
+    )
 
 
 def main():
@@ -1173,13 +1466,25 @@ def main():
     except Exception:
         pass
 
-    diagnostico, argumentos_ruta = analizar_argumentos(sys.argv[1:])
+    try:
+        (
+            diagnostico,
+            argumentos_ruta,
+            marca_centro_mm,
+            escalar_marcas,
+            nombre_formato,
+        ) = analizar_argumentos(sys.argv[1:])
+    except ValueError as error:
+        print(f"Error de argumentos: {error}")
+        mostrar_uso()
+        return 2
     if not argumentos_ruta:
         mostrar_uso()
         return 2
 
     try:
-        if not validar_plantillas():
+        formato = obtener_formato(nombre_formato)
+        if not validar_plantillas(formato):
             return 1
 
         entradas = [
@@ -1202,6 +1507,9 @@ def main():
                 ruta,
                 rutas_abiertas_antes,
                 diagnostico=diagnostico,
+                marca_centro_mm=marca_centro_mm,
+                escalar_marcas=escalar_marcas,
+                formato=formato,
             )
             resultados.append(resultado)
             imprimir_resultado(resultado)
