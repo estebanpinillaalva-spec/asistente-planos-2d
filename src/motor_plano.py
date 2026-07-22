@@ -76,8 +76,8 @@ ESCALAS_AMPLIACION = [
     {"texto": "5:1", "numerador": 5.0, "denominador": 1.0},
     {"texto": "10:1", "numerador": 10.0, "denominador": 1.0},
 ]
-# Para cada vista se prueba siempre de la mayor ampliación a la mayor
-# reducción y se conserva la primera escala que cabe.
+# La isométrica prueba de la mayor ampliación a la mayor reducción y conserva
+# la primera escala que cabe. El alzado aplica más abajo su regla centrada en 1:1.
 ESCALAS_NORMALIZADAS = list(reversed(ESCALAS_AMPLIACION)) + ESCALAS_REDUCCION
 
 # Margen de encuadernación: el marco de la plantilla está más adentro
@@ -97,6 +97,12 @@ PROPORCION_COLUMNA_DERECHA = 0.45
 PROPORCION_FILA_DERECHA = 0.50
 # Cada vista solo puede usar el 90 % de su celda.
 MARGEN_SEGURIDAD_CELDA = 0.10
+# 1:1 es la escala preferente. Solo se amplía cuando la vista ocupa menos del
+# 25 % y se lee mal, o se reduce cuando supera el techo del 60 %.
+OCUPACION_MINIMA_ALZADO = 0.25
+# El 60 % es un techo, no un objetivo: el resto de la celda se reserva para
+# cotas y para vistas todavía no dibujadas, como la sección y quizá otra más.
+OCUPACION_MAXIMA_ALZADO = 0.60
 
 # La isométrica se aproxima como un cuadrado. Este factor se podrá ajustar
 # cuando comparemos la estimación con más planos generados.
@@ -407,6 +413,63 @@ def comprobar_cabida_vista(disposicion, nombre):
     return not excesos, excesos
 
 
+def _ocupacion_alzado(
+    largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m, escala
+):
+    """Calcula el mayor uso porcentual del ancho o alto de la columna."""
+    tamanos = calcular_tamanos_vistas(largo_mm, medio_mm, escala)
+    area = calcular_area_util(ancho_hoja_m, alto_hoja_m)
+    celda = calcular_celdas(area)["alzado"]
+    ocupacion_ancho = tamanos["alzado"]["ancho_mm"] / celda["ancho_mm"]
+    ocupacion_alto = tamanos["alzado"]["alto_mm"] / celda["alto_mm"]
+    return max(ocupacion_ancho, ocupacion_alto)
+
+
+def _elegir_escala_alzado(largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m):
+    """Prefiere 1:1 y solo amplía o reduce si la ocupación lo exige."""
+    escala_uno_a_uno = ESCALAS_REDUCCION[0]
+    ocupacion_uno_a_uno = _ocupacion_alzado(
+        largo_mm,
+        medio_mm,
+        ancho_hoja_m,
+        alto_hoja_m,
+        escala_uno_a_uno,
+    )
+
+    if ocupacion_uno_a_uno > OCUPACION_MAXIMA_ALZADO:
+        ultimo_intento = None
+        for escala in ESCALAS_REDUCCION[1:]:
+            ocupacion = _ocupacion_alzado(
+                largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m, escala
+            )
+            ultimo_intento = (escala, ocupacion)
+            if ocupacion <= OCUPACION_MAXIMA_ALZADO:
+                return escala, ocupacion, None
+
+        escala, ocupacion = ultimo_intento
+        exceso = (ocupacion - OCUPACION_MAXIMA_ALZADO) * 100.0
+        aviso = (
+            "el alzado supera el 60 % incluso a 1:20; se guardará "
+            f"igualmente. Ocupación={ocupacion * 100.0:.1f} %, "
+            f"exceso={exceso:.1f} puntos porcentuales"
+        )
+        return escala, ocupacion, aviso
+
+    if ocupacion_uno_a_uno < OCUPACION_MINIMA_ALZADO:
+        escala_elegida = escala_uno_a_uno
+        ocupacion_elegida = ocupacion_uno_a_uno
+        for escala in ESCALAS_AMPLIACION:
+            ocupacion = _ocupacion_alzado(
+                largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m, escala
+            )
+            if ocupacion <= OCUPACION_MAXIMA_ALZADO:
+                escala_elegida = escala
+                ocupacion_elegida = ocupacion
+        return escala_elegida, ocupacion_elegida, None
+
+    return escala_uno_a_uno, ocupacion_uno_a_uno, None
+
+
 def _elegir_escala_para_vista(
     largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m, nombre_vista
 ):
@@ -439,8 +502,8 @@ def elegir_escalas_independientes(
     """Elige por separado la escala del alzado y la de la isométrica."""
     # La escala del plano y del cajetín la manda el alzado. La isométrica es
     # ilustrativa y puede reducirse de forma independiente para usar su celda.
-    escala_alzado, aviso_alzado = _elegir_escala_para_vista(
-        largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m, "alzado"
+    escala_alzado, ocupacion_alzado, aviso_alzado = _elegir_escala_alzado(
+        largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m
     )
     escala_isometrica, aviso_isometrica = _elegir_escala_para_vista(
         largo_mm, medio_mm, ancho_hoja_m, alto_hoja_m, "isometrica"
@@ -459,11 +522,6 @@ def elegir_escalas_independientes(
     disposicion = calcular_disposicion(
         ancho_hoja_m, alto_hoja_m, tamanos
     )
-    ocupacion = (
-        tamanos["alzado"]["ancho_mm"]
-        / disposicion["celdas"]["alzado"]["ancho_mm"]
-        * 100.0
-    )
     avisos = [
         aviso
         for aviso in (aviso_alzado, aviso_isometrica)
@@ -473,7 +531,7 @@ def elegir_escalas_independientes(
         escala_alzado,
         escala_isometrica,
         disposicion,
-        ocupacion,
+        ocupacion_alzado * 100.0,
         avisos,
     )
 
