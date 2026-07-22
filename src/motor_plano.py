@@ -87,6 +87,21 @@ PAPEL_DE_USUARIO = 12  # swDwgPapersUserDefined, confirmado para 2023
 PLANTILLA_PERSONALIZADA = 12  # swDwgTemplateCustom, confirmado para 2023
 PREFERENCIA_PLANTILLA_PLANO = 10  # swDefaultTemplateDrawing
 PREFERENCIA_AUTOESCALA_VISTAS = 86  # swAutomaticScaling3ViewDrawings
+# Preferencias de documento confirmadas en swconst.tlb de SolidWorks 2023:
+# swDetailingAutoInsertCenterMarksForHoles = 308
+# swDetailingAutoInsertCenterLines = 190
+# swDetailingConnectionLinesHolePatternsCenterMarks = 599
+# swDetailingCenterMarkScaleByViewScale = 613
+# swDetailingCenterMarkSize = 12
+OPCION_DETALLADO_SIN_ESPECIFICAR = 0  # swDetailingNoOptionSpecified
+PREFERENCIAS_BOOLEANAS_ANOTACIONES = [
+    ("swDetailingAutoInsertCenterMarksForHoles", 308),
+    ("swDetailingAutoInsertCenterLines", 190),
+    ("swDetailingConnectionLinesHolePatternsCenterMarks", 599),
+    ("swDetailingCenterMarkScaleByViewScale", 613),
+]
+PREFERENCIA_TAMANO_MARCA_CENTRO = 12
+TAMANO_MARCA_CENTRO_M = 0.0015  # 1,5 mm sobre el plano.
 VERSION_GUARDADO_ACTUAL = 0
 OPCION_GUARDAR_SILENCIOSO = 1
 
@@ -235,63 +250,49 @@ def verificar_rectangulos_en_area(area, rectangulos):
 
 
 def calcular_disposicion(ancho_hoja_m, alto_hoja_m, tamanos):
-    """Elige una disposición que mantenga ambas vistas dentro del área útil."""
+    """Coloca la isométrica arriba a la izquierda y el alzado donde quepa."""
     area = calcular_area_util(ancho_hoja_m, alto_hoja_m)
     alzado = tamanos["alzado"]
     isometrica = tamanos["isometrica"]
 
-    ancho_grupo = (
-        alzado["ancho_mm"]
-        + SEPARACION_VISTAS_MM
-        + isometrica["ancho_mm"]
+    # La isométrica siempre queda pegada a la esquina superior izquierda del
+    # área útil. CreateDrawViewFromModelView3 recibe el centro de la vista.
+    coordenadas_isometrica_mm = (
+        area["izquierda_mm"] + isometrica["ancho_mm"] / 2.0,
+        area["superior_mm"] - isometrica["alto_mm"] / 2.0,
     )
-    alto_grupo = (
-        alzado["alto_mm"]
-        + SEPARACION_VISTAS_MM
-        + isometrica["alto_mm"]
+    borde_derecho_isometrica = (
+        area["izquierda_mm"] + isometrica["ancho_mm"]
     )
-    cabe_lado_a_lado = (
-        ancho_grupo <= area["ancho_mm"]
-        and max(alzado["alto_mm"], isometrica["alto_mm"]) <= area["alto_mm"]
-    )
-    cabe_apilada = (
-        alto_grupo <= area["alto_mm"]
-        and max(alzado["ancho_mm"], isometrica["ancho_mm"])
-        <= area["ancho_mm"]
+    inicio_franja_derecha = borde_derecho_isometrica + SEPARACION_VISTAS_MM
+    ancho_franja_derecha = area["derecha_mm"] - inicio_franja_derecha
+    cabe_a_la_derecha = (
+        alzado["ancho_mm"] <= ancho_franja_derecha
+        and alzado["alto_mm"] <= area["alto_mm"]
     )
 
-    if cabe_lado_a_lado:
-        inicio_x = (
-            area["izquierda_mm"] + (area["ancho_mm"] - ancho_grupo) / 2.0
-        )
-        centro_y = area["centro_y_mm"]
+    borde_inferior_isometrica = (
+        area["superior_mm"] - isometrica["alto_mm"]
+    )
+    fin_franja_inferior = borde_inferior_isometrica - SEPARACION_VISTAS_MM
+    alto_franja_inferior = fin_franja_inferior - area["inferior_mm"]
+    cabe_debajo = (
+        alzado["ancho_mm"] <= area["ancho_mm"]
+        and alzado["alto_mm"] <= alto_franja_inferior
+    )
+
+    if cabe_a_la_derecha:
         coordenadas_alzado_mm = (
-            inicio_x + alzado["ancho_mm"] / 2.0,
-            centro_y,
+            inicio_franja_derecha + ancho_franja_derecha / 2.0,
+            area["centro_y_mm"],
         )
-        coordenadas_isometrica_mm = (
-            inicio_x
-            + alzado["ancho_mm"]
-            + SEPARACION_VISTAS_MM
-            + isometrica["ancho_mm"] / 2.0,
-            centro_y,
-        )
-        tipo = "lado a lado"
-    elif cabe_apilada:
-        centro_x = area["centro_x_mm"]
-        inicio_y = area["inferior_mm"] + (area["alto_mm"] - alto_grupo) / 2.0
-        coordenadas_isometrica_mm = (
-            centro_x,
-            inicio_y + isometrica["alto_mm"] / 2.0,
-        )
+        tipo = "alzado a la derecha"
+    elif cabe_debajo:
         coordenadas_alzado_mm = (
-            centro_x,
-            inicio_y
-            + isometrica["alto_mm"]
-            + SEPARACION_VISTAS_MM
-            + alzado["alto_mm"] / 2.0,
+            area["centro_x_mm"],
+            area["inferior_mm"] + alto_franja_inferior / 2.0,
         )
-        tipo = "apilada"
+        tipo = "alzado debajo"
     else:
         raise ValueError(
             "las vistas no caben: "
@@ -300,7 +301,8 @@ def calcular_disposicion(ancho_hoja_m, alto_hoja_m, tamanos):
             f"área útil={area['ancho_mm']:.1f} x {area['alto_mm']:.1f} mm; "
             f"alzado={alzado['ancho_mm']:.1f} x {alzado['alto_mm']:.1f} mm; "
             f"isométrica={isometrica['ancho_mm']:.1f} x "
-            f"{isometrica['alto_mm']:.1f} mm"
+            f"{isometrica['alto_mm']:.1f} mm; no cabe ni a la derecha "
+            "ni debajo de la isométrica"
         )
 
     rectangulos = {
@@ -405,6 +407,111 @@ def texto_error(error):
     if isinstance(error, (pywintypes.com_error, AttributeError)):
         return texto_error_com(error)
     return f"{type(error).__name__}: {error}"
+
+
+def aplicar_preferencias_anotaciones(plano):
+    """Activa marcas y ejes, guardando cada valor original que modifica."""
+    cambios = []
+    avisos = []
+    try:
+        # Extension devuelve un objeto COM: acceso directo, sin leer().
+        extension = plano.Extension
+    except Exception as error:
+        avisos.append(
+            "no se pudo acceder a IModelDoc2.Extension para configurar "
+            f"marcas de centro y ejes: {texto_error(error)}"
+        )
+        return None, cambios, avisos
+
+    for nombre, identificador in PREFERENCIAS_BOOLEANAS_ANOTACIONES:
+        try:
+            original = bool(
+                extension.GetUserPreferenceToggle(
+                    identificador, OPCION_DETALLADO_SIN_ESPECIFICAR
+                )
+            )
+            correcto = extension.SetUserPreferenceToggle(
+                identificador,
+                OPCION_DETALLADO_SIN_ESPECIFICAR,
+                True,
+            )
+            if correcto is False:
+                raise RuntimeError("SolidWorks devolvió False")
+            cambios.append(
+                {
+                    "tipo": "booleano",
+                    "nombre": nombre,
+                    "identificador": identificador,
+                    "original": original,
+                    "nuevo": True,
+                }
+            )
+        except Exception as error:
+            avisos.append(
+                f"no se pudo aplicar {nombre} ({identificador}): "
+                f"{texto_error(error)}"
+            )
+
+    try:
+        original = float(
+            extension.GetUserPreferenceDouble(
+                PREFERENCIA_TAMANO_MARCA_CENTRO,
+                OPCION_DETALLADO_SIN_ESPECIFICAR,
+            )
+        )
+        correcto = extension.SetUserPreferenceDouble(
+            PREFERENCIA_TAMANO_MARCA_CENTRO,
+            OPCION_DETALLADO_SIN_ESPECIFICAR,
+            TAMANO_MARCA_CENTRO_M,
+        )
+        if correcto is False:
+            raise RuntimeError("SolidWorks devolvió False")
+        cambios.append(
+            {
+                "tipo": "doble",
+                "nombre": "swDetailingCenterMarkSize",
+                "identificador": PREFERENCIA_TAMANO_MARCA_CENTRO,
+                "original": original,
+                "nuevo": TAMANO_MARCA_CENTRO_M,
+            }
+        )
+    except Exception as error:
+        avisos.append(
+            "no se pudo aplicar swDetailingCenterMarkSize (12): "
+            f"{texto_error(error)}"
+        )
+
+    return extension, cambios, avisos
+
+
+def restaurar_preferencias_anotaciones(extension, cambios):
+    """Restaura las preferencias del plano sin ocultar fallos individuales."""
+    avisos = []
+    if extension is None:
+        return avisos
+
+    for cambio in reversed(cambios):
+        try:
+            if cambio["tipo"] == "booleano":
+                correcto = extension.SetUserPreferenceToggle(
+                    cambio["identificador"],
+                    OPCION_DETALLADO_SIN_ESPECIFICAR,
+                    cambio["original"],
+                )
+            else:
+                correcto = extension.SetUserPreferenceDouble(
+                    cambio["identificador"],
+                    OPCION_DETALLADO_SIN_ESPECIFICAR,
+                    cambio["original"],
+                )
+            if correcto is False:
+                raise RuntimeError("SolidWorks devolvió False")
+        except Exception as error:
+            avisos.append(
+                f"no se pudo restaurar {cambio['nombre']} "
+                f"({cambio['identificador']}): {texto_error(error)}"
+            )
+    return avisos
 
 
 def abrir_pieza(swapp, ruta):
@@ -592,6 +699,7 @@ def imprimir_diagnostico(
     alto_m,
     disposicion,
     tamano_leido_api,
+    cambios_anotaciones,
 ):
     """Imprime los datos COM necesarios para diagnosticar las vistas."""
     nombres_vistas = obtener_nombres_vistas_modelo(pieza)
@@ -709,6 +817,21 @@ def imprimir_diagnostico(
         f"isométrica=(x={coordenadas_isometrica[0]:.4f}, "
         f"y={coordenadas_isometrica[1]:.4f}) m"
     )
+    print("  Preferencias de anotación modificadas:")
+    if cambios_anotaciones:
+        for cambio in cambios_anotaciones:
+            if cambio["tipo"] == "doble":
+                original = f"{cambio['original'] * 1000.0:.3f} mm"
+                nuevo = f"{cambio['nuevo'] * 1000.0:.3f} mm"
+            else:
+                original = str(cambio["original"])
+                nuevo = str(cambio["nuevo"])
+            print(
+                f"    {cambio['nombre']} ({cambio['identificador']}): "
+                f"original={original}; temporal={nuevo}"
+            )
+    else:
+        print("    (ninguna; véanse los avisos anteriores)")
     print("  --- FIN DEL DIAGNÓSTICO COM ---")
 
 
@@ -791,6 +914,9 @@ def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
     nombre_plano = ""
     autoescala_original = None
     autoescala_modificada = False
+    extension_anotaciones = None
+    cambios_anotaciones = []
+    preferencias_anotaciones_pendientes = False
     pieza_ya_abierta = False
     ruta_salida = CARPETA_SALIDA / f"{ruta.stem}.SLDDRW"
 
@@ -859,6 +985,18 @@ def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
         coordenadas_alzado = disposicion["coordenadas_alzado_m"]
         coordenadas_isometrica = disposicion["coordenadas_isometrica_m"]
 
+        # Estas opciones pertenecen al documento de plano. Se activan solo
+        # durante la creación de las vistas y se restauran antes de guardar.
+        (
+            extension_anotaciones,
+            cambios_anotaciones,
+            avisos_preferencias,
+        ) = aplicar_preferencias_anotaciones(plano)
+        preferencias_anotaciones_pendientes = bool(cambios_anotaciones)
+        for aviso in avisos_preferencias:
+            resultado["avisos"].append(aviso)
+            print(f"AVISO: {aviso}")
+
         # CreateDrawViewFromModelView* exige que el plano de destino sea el
         # documento activo. En SolidWorks 2023 se prueba primero ActivateDoc3.
         _, metodo_activacion, codigo_activacion = activar_plano(
@@ -883,6 +1021,7 @@ def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
                 alto_m,
                 disposicion,
                 tamano_leido_api,
+                cambios_anotaciones,
             )
 
         # SolidWorks puede cambiar la escala al insertar la primera vista.
@@ -929,6 +1068,14 @@ def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
                 f"{nombre_isometrica}"
             )
 
+        avisos_restauracion = restaurar_preferencias_anotaciones(
+            extension_anotaciones, cambios_anotaciones
+        )
+        preferencias_anotaciones_pendientes = bool(avisos_restauracion)
+        for aviso in avisos_restauracion:
+            resultado["avisos"].append(aviso)
+            print(f"AVISO: {aviso}")
+
         errores_guardado, avisos_guardado = guardar_plano(plano, ruta_salida)
         if errores_guardado or avisos_guardado:
             resultado["avisos"].append(
@@ -941,6 +1088,16 @@ def procesar_pieza(swapp, ruta, rutas_abiertas_antes, diagnostico=False):
     except Exception as error:
         _registrar_fallo(resultado, texto_error(error))
     finally:
+        # Si hubo un error antes de la restauración normal, se intenta aquí
+        # antes de cerrar el plano. Cada fallo se informa, pero no oculta otro.
+        if preferencias_anotaciones_pendientes:
+            avisos_restauracion = restaurar_preferencias_anotaciones(
+                extension_anotaciones, cambios_anotaciones
+            )
+            for aviso in avisos_restauracion:
+                resultado["avisos"].append(aviso)
+                print(f"AVISO: {aviso}")
+
         if autoescala_modificada:
             try:
                 swapp.SetUserPreferenceToggle(
