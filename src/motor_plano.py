@@ -95,8 +95,6 @@ DESPLAZAMIENTO_VERTICAL_ALZADO = 0.08  # 8 % del alto útil.
 PROPORCION_COLUMNA_ALZADO = 0.55
 PROPORCION_COLUMNA_DERECHA = 0.45
 PROPORCION_FILA_DERECHA = 0.50
-# Cada vista solo puede usar el 90 % de su celda.
-MARGEN_SEGURIDAD_CELDA = 0.10
 # 1:1 es la escala preferente. Solo se amplía cuando la vista ocupa menos del
 # 25 % y se lee mal, o se reduce cuando supera el techo del 60 %.
 OCUPACION_MINIMA_ALZADO = 0.25
@@ -104,9 +102,13 @@ OCUPACION_MINIMA_ALZADO = 0.25
 # cotas y para vistas todavía no dibujadas, como la sección y quizá otra más.
 OCUPACION_MAXIMA_ALZADO = 0.60
 
-# La isométrica se aproxima como un cuadrado. Este factor se podrá ajustar
-# cuando comparemos la estimación con más planos generados.
-FACTOR_TAMANO_ISOMETRICA = 0.85
+# La proyección isométrica de una placa se aproxima como un rectángulo.
+# El ancho usa aproximadamente cos(30°) y el alto sen(30°), con un pequeño
+# margen por el espesor. Son factores ajustables al comparar planos reales.
+FACTOR_ANCHO_ISOMETRICA = 0.87
+FACTOR_ALTO_ISOMETRICA = 0.55
+# La isométrica no lleva cotas, por eso puede ocupar más celda que el alzado.
+OCUPACION_MAXIMA_ISOMETRICA = 0.80
 TIPO_CUERPO_SOLIDO = 0
 
 # Valores numéricos de SolidWorks.Interop.swconst 31.2.1.1 (SolidWorks 2023).
@@ -217,8 +219,11 @@ def dimensiones_pieza(pieza):
 def calcular_tamanos_vistas(largo_mm, medio_mm, escala):
     """Estima en milímetros cuánto ocupará cada vista sobre el papel."""
     factor_escala = escala["numerador"] / escala["denominador"]
-    lado_isometrica = (
-        FACTOR_TAMANO_ISOMETRICA * (largo_mm + medio_mm) * factor_escala
+    ancho_isometrica = (
+        FACTOR_ANCHO_ISOMETRICA * (largo_mm + medio_mm) * factor_escala
+    )
+    alto_isometrica = (
+        FACTOR_ALTO_ISOMETRICA * (largo_mm + medio_mm) * factor_escala
     )
     return {
         "alzado": {
@@ -226,8 +231,8 @@ def calcular_tamanos_vistas(largo_mm, medio_mm, escala):
             "alto_mm": medio_mm * factor_escala,
         },
         "isometrica": {
-            "ancho_mm": lado_isometrica,
-            "alto_mm": lado_isometrica,
+            "ancho_mm": ancho_isometrica,
+            "alto_mm": alto_isometrica,
         },
     }
 
@@ -382,9 +387,10 @@ def calcular_disposicion(ancho_hoja_m, alto_hoja_m, tamanos):
 
 
 def _limites_seguros(celda):
-    """Reduce una celda un 10 % total para dejar aire alrededor de la vista."""
-    margen_x = celda["ancho_mm"] * MARGEN_SEGURIDAD_CELDA / 2.0
-    margen_y = celda["alto_mm"] * MARGEN_SEGURIDAD_CELDA / 2.0
+    """Limita la isométrica al 80 % de su celda, centrada en ella."""
+    margen_total = 1.0 - OCUPACION_MAXIMA_ISOMETRICA
+    margen_x = celda["ancho_mm"] * margen_total / 2.0
+    margen_y = celda["alto_mm"] * margen_total / 2.0
     return {
         "izquierda_mm": celda["izquierda_mm"] + margen_x,
         "derecha_mm": celda["derecha_mm"] - margen_x,
@@ -522,6 +528,13 @@ def elegir_escalas_independientes(
     disposicion = calcular_disposicion(
         ancho_hoja_m, alto_hoja_m, tamanos
     )
+    celda_isometrica = disposicion["celdas"]["isometrica"]
+    ocupacion_isometrica = max(
+        tamanos["isometrica"]["ancho_mm"]
+        / celda_isometrica["ancho_mm"],
+        tamanos["isometrica"]["alto_mm"]
+        / celda_isometrica["alto_mm"],
+    )
     avisos = [
         aviso
         for aviso in (aviso_alzado, aviso_isometrica)
@@ -532,6 +545,7 @@ def elegir_escalas_independientes(
         escala_isometrica,
         disposicion,
         ocupacion_alzado * 100.0,
+        ocupacion_isometrica * 100.0,
         avisos,
     )
 
@@ -1157,6 +1171,7 @@ def procesar_pieza(
         "alzado_elegido": "-",
         "eje_espesor": "-",
         "ocupacion_alzado": 0.0,
+        "ocupacion_isometrica": 0.0,
         "marca_centro_mm": marca_centro_mm,
         "escalar_marcas": escalar_marcas,
         "correcto": False,
@@ -1208,7 +1223,7 @@ def procesar_pieza(
         resultado["eje_espesor"] = eje_espesor
         # La primera estimación permite aplicar ya una escala razonable al
         # crear la hoja. Después se repite con el tamaño real leído de la API.
-        escala, _, _, _, _ = elegir_escalas_independientes(
+        escala, _, _, _, _, _ = elegir_escalas_independientes(
             largo,
             medio,
             formato["ancho_m"],
@@ -1251,6 +1266,7 @@ def procesar_pieza(
             escala_isometrica,
             disposicion,
             ocupacion,
+            ocupacion_isometrica,
             avisos_escala,
         ) = elegir_escalas_independientes(
             largo, medio, ancho_m, alto_m
@@ -1263,6 +1279,7 @@ def procesar_pieza(
         resultado["escala"] = escala["texto"]
         resultado["escala_isometrica"] = escala_isometrica["texto"]
         resultado["ocupacion_alzado"] = ocupacion
+        resultado["ocupacion_isometrica"] = ocupacion_isometrica
         for aviso_escala in avisos_escala:
             resultado["avisos"].append(aviso_escala)
             print(f"AVISO: {aviso_escala}")
@@ -1444,6 +1461,8 @@ def imprimir_resultado(resultado):
         f"escala-alzado={resultado['escala']} | "
         f"escala-isométrica={resultado['escala_isometrica']} | "
         f"ocupación-alzado={resultado['ocupacion_alzado']:.1f}% | "
+        f"ocupación-isométrica="
+        f"{resultado['ocupacion_isometrica']:.1f}% | "
         f"vistas={resultado['vistas']} | "
         f"nombres={nombres} | "
         f"alzado={resultado['alzado_elegido']} "
