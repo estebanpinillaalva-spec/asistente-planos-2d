@@ -5,7 +5,9 @@ Uso: .venv\Scripts\python.exe src\motor_plano.py "C:\ruta\pieza.SLDPRT"
 
 import sys
 import unicodedata
+from math import sqrt
 from pathlib import Path
+from statistics import median
 
 import pythoncom
 import pywintypes
@@ -113,10 +115,30 @@ OCUPACION_MAXIMA_ISOMETRICA = 0.80
 # flechas no queden pegadas a la geometría. Se podrá ajustar tras verla.
 MARGEN_LINEA_CORTE_MM = 5.0
 ALTURA_CORTE_POR_DEFECTO = 0.0
+MODO_CORTE_POR_DEFECTO = "auto"
+MODOS_CORTE_VALIDOS = ("auto", "horizontal", "vertical")
+# Dos caras se consideran el mismo taladro si sus ejes y radios coinciden
+# dentro de 0,1 mm. Es una tolerancia geométrica, no de fabricación.
+TOLERANCIA_AGRUPAR_TALADROS_M = 0.0001
+# La misma tolerancia agrupa los centros que forman una fila o columna.
+TOLERANCIA_COLUMNA_TALADROS_M = 0.0001
+# Se admite 1 mm numérico al comparar la proyección con el rectángulo
+# calculado del alzado, usando únicamente la aritmética de caja y escala.
+TOLERANCIA_PROYECCION_MM = 1.0
+# El eje de un taladro pasante de placa debe coincidir prácticamente con el
+# eje de espesor. Este coseno admite pequeñas imprecisiones numéricas.
+ALINEACION_MINIMA_EJE_TALADRO = 0.999
+# El cilindro central grande no es un agujero de fijación. Solo se excluye si
+# su radio supera claramente (más de 3 veces) la mediana de los demás.
+FACTOR_RADIO_AGUJERO_CENTRAL = 3.0
 # CreateSectionViewAt5 trabaja en silencio. Con options=0 crea una sección
 # completa, alineada y con la dirección predeterminada, sin cuadro de "flip".
 OPCIONES_SECCION_NORMAL = 0
 OPCIONES_SECCION_ESCALA_MODELO = 8  # swCreateSectionView_ScaleWithModel
+# Un corte vertical se proyecta hacia un lado. NotAligned evita que
+# SolidWorks ignore el centro de la celda inferior derecha.
+OPCIONES_SECCION_NO_ALINEADA = 1  # swCreateSectionView_NotAligned
+OPCIONES_SECCION_NO_ALINEADA_ESCALA_MODELO = 9  # NotAligned | ScaleWithModel
 PROFUNDIDAD_SECCION_COMPLETA_M = 0.0
 ETIQUETA_SECCION = "A"
 TIPO_CUERPO_SOLIDO = 0
@@ -194,9 +216,130 @@ def _obtener_caja(pieza):
             ) from error_alternativo
 
 
-def medir_pieza_y_elegir_alzado(pieza):
+def _normalizar_eje(eje):
+    """Normaliza un eje y fija su signo para poder comparar cilindros."""
+    longitud = sqrt(sum(componente * componente for componente in eje))
+    if longitud <= 0.0:
+        raise ValueError("una superficie cilíndrica tiene eje nulo")
+    eje = tuple(componente / longitud for componente in eje)
+    for componente in eje:
+        if abs(componente) > 0.000000001:
+            if componente < 0.0:
+                eje = tuple(-valor for valor in eje)
+            break
+    return eje
+
+
+def _centro_canonico_eje(origen, eje, referencia):
+    """Proyecta una referencia sobre el eje para obtener un punto único."""
+    avance = sum(
+        (referencia[i] - origen[i]) * eje[i] for i in range(3)
+    )
+    return tuple(origen[i] + avance * eje[i] for i in range(3))
+
+
+def _son_el_mismo_cilindro(primero, segundo):
+    """Compara eje, centro y radio con una tolerancia de 0,1 mm."""
+    diferencia_eje = sqrt(
+        sum(
+            (primero["eje"][i] - segundo["eje"][i]) ** 2
+            for i in range(3)
+        )
+    )
+    diferencia_centro = sqrt(
+        sum(
+            (primero["centro"][i] - segundo["centro"][i]) ** 2
+            for i in range(3)
+        )
+    )
+    diferencia_radio = abs(primero["radio"] - segundo["radio"])
+    return (
+        diferencia_eje <= 0.000001
+        and diferencia_centro <= TOLERANCIA_AGRUPAR_TALADROS_M
+        and diferencia_radio <= TOLERANCIA_AGRUPAR_TALADROS_M
+    )
+
+
+def detectar_taladros(pieza):
+    """Devuelve los cilindros distintos que representan taladros pequeños."""
+    # GetBodies2, GetFaces y GetSurface devuelven objetos COM. Por eso se
+    # accede a ellos directamente y nunca mediante leer().
+    cuerpos = pieza.GetBodies2(TIPO_CUERPO_SOLIDO, False)
+    if not cuerpos:
+        return []
+    caja = _obtener_caja(pieza)
+    centro_pieza = (
+        (caja[0] + caja[3]) / 2.0,
+        (caja[1] + caja[4]) / 2.0,
+        (caja[2] + caja[5]) / 2.0,
+    )
+
+    cilindros = []
+    for cuerpo in cuerpos:
+        caras = cuerpo.GetFaces()
+        if not caras:
+            continue
+        for cara in caras:
+            superficie = cara.GetSurface()
+            if superficie is None or not leer(superficie, "IsCylinder"):
+                continue
+            # En una cara interior (agujero), la normal de la cara se opone a
+            # la normal natural del cilindro. Así se descartan redondeos y
+            # paredes cilíndricas exteriores antes de medir su eje.
+            if not leer(cara, "FaceInSurfaceSense"):
+                continue
+
+            # SolidWorks 2023 devuelve exactamente:
+            # [origenX, origenY, origenZ, ejeX, ejeY, ejeZ, radio].
+            # El origen y el radio están expresados en metros.
+            parametros = leer(superficie, "CylinderParams")
+            if parametros is None or len(parametros) != 7:
+                continue
+            origen = tuple(float(valor) for valor in parametros[0:3])
+            eje = _normalizar_eje(
+                tuple(float(valor) for valor in parametros[3:6])
+            )
+            radio = abs(float(parametros[6]))
+            if radio <= 0.0:
+                continue
+
+            cilindro = {
+                # CylinderParams da un punto cualquiera del eje. El centro de
+                # la caja se proyecta sobre él para situar el resultado en el
+                # plano medio de la pieza; su proyección 2D no cambia.
+                "centro": _centro_canonico_eje(
+                    origen, eje, centro_pieza
+                ),
+                "eje": eje,
+                "radio": radio,
+            }
+            if not any(
+                _son_el_mismo_cilindro(cilindro, existente)
+                for existente in cilindros
+            ):
+                cilindros.append(cilindro)
+
+    if len(cilindros) > 1:
+        radio_mediano = median(
+            cilindro["radio"] for cilindro in cilindros
+        )
+        radio_mayor = max(cilindro["radio"] for cilindro in cilindros)
+        if radio_mayor > FACTOR_RADIO_AGUJERO_CENTRAL * radio_mediano:
+            cilindros = [
+                cilindro
+                for cilindro in cilindros
+                if abs(cilindro["radio"] - radio_mayor)
+                > TOLERANCIA_AGRUPAR_TALADROS_M
+            ]
+
+    return cilindros
+
+
+def medir_pieza_y_elegir_alzado(pieza, caja=None):
     """Mide la pieza y elige la vista estándar que muestra su cara grande."""
-    xmin, ymin, zmin, xmax, ymax, zmax = _obtener_caja(pieza)
+    if caja is None:
+        caja = _obtener_caja(pieza)
+    xmin, ymin, zmin, xmax, ymax, zmax = caja
     extensiones = {
         "X": abs(xmax - xmin) * 1000.0,
         "Y": abs(ymax - ymin) * 1000.0,
@@ -422,6 +565,7 @@ def calcular_linea_corte(disposicion, escala_alzado, altura_corte):
     y_modelo_m = altura_corte * semialto_papel_m / factor_escala
 
     return {
+        "orientacion": "horizontal",
         "hoja_m": (x1_hoja_m, y_hoja_m, x2_hoja_m, y_hoja_m),
         "vista_m": (
             -semiancho_modelo_m - margen_modelo_m,
@@ -430,6 +574,214 @@ def calcular_linea_corte(disposicion, escala_alzado, altura_corte):
             y_modelo_m,
         ),
     }
+
+
+def proyectar_taladros(
+    taladros, eje_espesor, caja, disposicion, escala_alzado
+):
+    """Proyecta centros del modelo a la hoja y devuelve avisos geométricos."""
+    ejes_vista = {
+        "Z": (0, 1),  # Frontal: horizontal X, vertical Y.
+        "Y": (0, 2),  # Superior: horizontal X, vertical Z.
+        "X": (1, 2),  # Derecha: horizontal Y, vertical Z.
+    }
+    indice_h, indice_v = ejes_vista[eje_espesor]
+    indice_espesor = {"X": 0, "Y": 1, "Z": 2}[eje_espesor]
+    centro_modelo = (
+        (caja[0] + caja[3]) / 2.0,
+        (caja[1] + caja[4]) / 2.0,
+        (caja[2] + caja[5]) / 2.0,
+    )
+    h_centro = centro_modelo[indice_h]
+    v_centro = centro_modelo[indice_v]
+    x_centro, y_centro = disposicion["coordenadas_alzado_m"]
+    factor = escala_alzado["numerador"] / escala_alzado["denominador"]
+    rectangulo = disposicion["rectangulos"]["alzado"]
+
+    proyectados = []
+    avisos = []
+    for taladro in taladros:
+        if (
+            abs(taladro["eje"][indice_espesor])
+            < ALINEACION_MINIMA_EJE_TALADRO
+        ):
+            continue
+        h = taladro["centro"][indice_h]
+        v = taladro["centro"][indice_v]
+        x_hoja = x_centro + (h - h_centro) * factor
+        y_hoja = y_centro + (v - v_centro) * factor
+        x_mm = x_hoja * 1000.0
+        y_mm = y_hoja * 1000.0
+        plausible = (
+            rectangulo["izquierda_mm"] - TOLERANCIA_PROYECCION_MM
+            <= x_mm
+            <= rectangulo["derecha_mm"] + TOLERANCIA_PROYECCION_MM
+            and rectangulo["inferior_mm"] - TOLERANCIA_PROYECCION_MM
+            <= y_mm
+            <= rectangulo["superior_mm"] + TOLERANCIA_PROYECCION_MM
+        )
+        proyectado = {
+            **taladro,
+            "h": h,
+            "v": v,
+            "x_hoja": x_hoja,
+            "y_hoja": y_hoja,
+            "plausible": plausible,
+        }
+        proyectados.append(proyectado)
+        if not plausible:
+            avisos.append(
+                "la proyección de un taladro cae fuera del alzado: "
+                f"centro_modelo={taladro['centro']}, h={h:.6f}, "
+                f"v={v:.6f}, hoja=({x_hoja:.6f}, {y_hoja:.6f}) m, "
+                f"rectángulo={rectangulo}"
+            )
+
+    return proyectados, avisos
+
+
+def elegir_columna_derecha(taladros_proyectados):
+    """Agrupa por coordenada horizontal y devuelve la columna más a la derecha."""
+    validos = [
+        taladro
+        for taladro in taladros_proyectados
+        if taladro["plausible"]
+    ]
+    if not validos:
+        return None
+
+    columnas = []
+    for taladro in sorted(validos, key=lambda dato: dato["h"]):
+        columna = next(
+            (
+                grupo
+                for grupo in columnas
+                if abs(taladro["h"] - grupo[0]["h"])
+                <= TOLERANCIA_COLUMNA_TALADROS_M
+            ),
+            None,
+        )
+        if columna is None:
+            columnas.append([taladro])
+        else:
+            columna.append(taladro)
+
+    elegida = max(
+        columnas,
+        key=lambda grupo: sum(t["h"] for t in grupo) / len(grupo),
+    )
+    return {
+        "taladros": elegida,
+        "h": sum(t["h"] for t in elegida) / len(elegida),
+        "x_hoja": (
+            sum(t["x_hoja"] for t in elegida) / len(elegida)
+        ),
+    }
+
+
+def calcular_linea_corte_vertical(
+    disposicion, escala_alzado, columna_derecha=None
+):
+    """Calcula una línea vertical por una columna o por el centro del alzado."""
+    centro_x_m, centro_y_m = disposicion["coordenadas_alzado_m"]
+    tamano_alzado = disposicion["tamanos"]["alzado"]
+    semialto_papel_m = tamano_alzado["alto_mm"] / 2000.0
+    margen_papel_m = MARGEN_LINEA_CORTE_MM / 1000.0
+    x_hoja_m = (
+        columna_derecha["x_hoja"]
+        if columna_derecha is not None
+        else centro_x_m
+    )
+    y1_hoja_m = centro_y_m - semialto_papel_m - margen_papel_m
+    y2_hoja_m = centro_y_m + semialto_papel_m + margen_papel_m
+
+    factor = escala_alzado["numerador"] / escala_alzado["denominador"]
+    x_modelo_m = (x_hoja_m - centro_x_m) / factor
+    semialto_modelo_m = semialto_papel_m / factor
+    margen_modelo_m = margen_papel_m / factor
+    return {
+        "orientacion": "vertical",
+        "hoja_m": (x_hoja_m, y1_hoja_m, x_hoja_m, y2_hoja_m),
+        "vista_m": (
+            x_modelo_m,
+            -semialto_modelo_m - margen_modelo_m,
+            x_modelo_m,
+            semialto_modelo_m + margen_modelo_m,
+        ),
+    }
+
+
+def preparar_linea_corte(
+    pieza,
+    modo_corte,
+    eje_espesor,
+    caja,
+    disposicion,
+    escala_alzado,
+    altura_corte,
+):
+    """Elige corte vertical por taladros o el horizontal de respaldo."""
+    informacion = {
+        "taladros": [],
+        "proyectados": [],
+        "columna_derecha": None,
+    }
+    avisos = []
+
+    if modo_corte in ("auto", "vertical"):
+        try:
+            taladros = detectar_taladros(pieza)
+            proyectados, avisos_proyeccion = proyectar_taladros(
+                taladros,
+                eje_espesor,
+                caja,
+                disposicion,
+                escala_alzado,
+            )
+            columna = elegir_columna_derecha(proyectados)
+            informacion.update(
+                {
+                    "taladros": taladros,
+                    "proyectados": proyectados,
+                    "columna_derecha": columna,
+                }
+            )
+            avisos.extend(avisos_proyeccion)
+        except Exception as error:
+            avisos.append(
+                "no se pudieron detectar o proyectar los taladros: "
+                f"{texto_error(error)}"
+            )
+
+        columna = informacion["columna_derecha"]
+        if columna is not None:
+            return (
+                calcular_linea_corte_vertical(
+                    disposicion, escala_alzado, columna
+                ),
+                informacion,
+                avisos,
+            )
+        if modo_corte == "vertical":
+            avisos.append(
+                "no se encontró una columna válida de taladros; el corte "
+                "vertical pasará por el centro del alzado"
+            )
+            return (
+                calcular_linea_corte_vertical(
+                    disposicion, escala_alzado, None
+                ),
+                informacion,
+                avisos,
+            )
+
+    # En modo auto, no encontrar taladros no pone en riesgo la sección:
+    # se conserva el corte horizontal central comprobado en la ronda anterior.
+    return (
+        calcular_linea_corte(disposicion, escala_alzado, altura_corte),
+        informacion,
+        avisos,
+    )
 
 
 def _limites_seguros(celda):
@@ -1225,21 +1577,16 @@ def _eliminar_segmento_parcial(plano, segmento):
         pass
 
 
-def crear_seccion_horizontal(
+def crear_seccion_desde_linea(
     plano,
     vista_alzado,
-    disposicion,
-    escala_alzado,
+    linea,
+    punto_seccion,
     escala_seccion,
     usar_escala_independiente,
-    altura_corte,
 ):
-    """Crea una sección horizontal y devuelve sus datos de diagnóstico."""
+    """Crea una sección desde una línea ya calculada."""
     segmento = None
-    linea = calcular_linea_corte(
-        disposicion, escala_alzado, altura_corte
-    )
-    punto_seccion = disposicion["coordenadas_seccion_m"]
     nombre_vista_alzado = leer(vista_alzado, "GetName2")
     if not nombre_vista_alzado:
         raise RuntimeError("IView.GetName2 no devolvió el nombre del alzado")
@@ -1264,12 +1611,21 @@ def crear_seccion_horizontal(
         # Firma de enlace tardío comprobada en la ayuda 2023:
         # CreateSectionViewAt5(x, y, z, etiqueta, opciones,
         #                      componentes_excluidos, profundidad).
-        # El método es silencioso. Primero se usa 0 (sección completa normal);
-        # como alternativa se añade el flag 8 (ScaleWithModel), nunca "flip".
-        for opciones in (
-            OPCIONES_SECCION_NORMAL,
-            OPCIONES_SECCION_ESCALA_MODELO,
-        ):
+        # El método es silencioso. El corte vertical usa NotAligned para
+        # respetar la celda reservada. Los fallbacks solo añaden ScaleWithModel;
+        # nunca se activa ChangeDirection ("flip").
+        opciones_posibles = (
+            (
+                OPCIONES_SECCION_NO_ALINEADA,
+                OPCIONES_SECCION_NO_ALINEADA_ESCALA_MODELO,
+            )
+            if linea["orientacion"] == "vertical"
+            else (
+                OPCIONES_SECCION_NORMAL,
+                OPCIONES_SECCION_ESCALA_MODELO,
+            )
+        )
+        for opciones in opciones_posibles:
             try:
                 plano.ClearSelection2(True)
                 if not segmento.Select2(False, 0):
@@ -1335,8 +1691,9 @@ def procesar_pieza(
     marca_centro_mm=TAMANO_MARCA_CENTRO_MM_POR_DEFECTO,
     escalar_marcas=True,
     formato=None,
-    crear_seccion=True,
+    crear_seccion=False,
     altura_corte=ALTURA_CORTE_POR_DEFECTO,
+    modo_corte="auto",
 ):
     """Genera y guarda el plano de una pieza sin propagar sus errores."""
     resultado = {
@@ -1394,13 +1751,14 @@ def procesar_pieza(
                 f"OpenDoc6: errores={errores}, avisos={avisos}"
             )
 
+        caja = _obtener_caja(pieza)
         (
             espesor,
             medio,
             largo,
             tipo_vista_alzado,
             eje_espesor,
-        ) = medir_pieza_y_elegir_alzado(pieza)
+        ) = medir_pieza_y_elegir_alzado(pieza, caja)
         resultado["eje_espesor"] = eje_espesor
         # La primera estimación permite aplicar ya una escala razonable al
         # crear la hoja. Después se repite con el tamaño real leído de la API.
@@ -1580,33 +1938,95 @@ def procesar_pieza(
             print(f"AVISO: {aviso}")
 
         if crear_seccion:
-            escala_seccion, escala_propia, aviso_escala_seccion = (
-                elegir_escala_seccion(
-                    largo,
-                    espesor,
-                    escala,
-                    disposicion["celdas"]["seccion_reservada"],
-                )
-            )
-            resultado["escala_seccion"] = escala_seccion["texto"]
-            if aviso_escala_seccion:
-                resultado["avisos"].append(aviso_escala_seccion)
-                print(f"AVISO: {aviso_escala_seccion}")
-
             try:
+                linea_corte, datos_corte, avisos_corte = (
+                    preparar_linea_corte(
+                        pieza,
+                        modo_corte,
+                        eje_espesor,
+                        caja,
+                        disposicion,
+                        escala,
+                        altura_corte,
+                    )
+                )
+                # Un corte vertical muestra la dimensión media y el espesor;
+                # uno horizontal muestra el largo y el espesor.
+                dimension_seccion = (
+                    medio
+                    if linea_corte["orientacion"] == "vertical"
+                    else largo
+                )
+                escala_seccion, escala_propia, aviso_escala_seccion = (
+                    elegir_escala_seccion(
+                        dimension_seccion,
+                        espesor,
+                        escala,
+                        disposicion["celdas"]["seccion_reservada"],
+                    )
+                )
+                resultado["escala_seccion"] = escala_seccion["texto"]
+                if aviso_escala_seccion:
+                    resultado["avisos"].append(aviso_escala_seccion)
+                    print(f"AVISO: {aviso_escala_seccion}")
+
+                for aviso_corte in avisos_corte:
+                    resultado["avisos"].append(aviso_corte)
+                    print(f"AVISO: {aviso_corte}")
+
+                punto_seccion = disposicion["coordenadas_seccion_m"]
+                if diagnostico:
+                    print(
+                        "  Taladros detectados: "
+                        f"{len(datos_corte['taladros'])}"
+                    )
+                    for indice, taladro in enumerate(
+                        datos_corte["proyectados"], start=1
+                    ):
+                        print(
+                            f"    Taladro {indice}: "
+                            f"centro modelo={taladro['centro']} m; "
+                            "proyectado hoja="
+                            f"({taladro['x_hoja']:.6f}, "
+                            f"{taladro['y_hoja']:.6f}) m; "
+                            f"radio={taladro['radio']:.6f} m"
+                        )
+                    columna = datos_corte["columna_derecha"]
+                    if columna is None:
+                        print("  Columna derecha: no encontrada")
+                    else:
+                        print(
+                            "  Columna derecha elegida: "
+                            f"h={columna['h']:.6f} m; "
+                            f"x_hoja={columna['x_hoja']:.6f} m; "
+                            f"taladros={len(columna['taladros'])}"
+                        )
+                    hoja = tuple(
+                        valor * 1000.0
+                        for valor in linea_corte["hoja_m"]
+                    )
+                    local = tuple(
+                        valor * 1000.0
+                        for valor in linea_corte["vista_m"]
+                    )
+                    print(
+                        f"  Línea de corte final "
+                        f"({linea_corte['orientacion']}): hoja={hoja} mm; "
+                        f"vista local={local} mm"
+                    )
+
                 (
                     vista_seccion,
                     linea_corte,
                     punto_seccion,
                     opciones_seccion,
-                ) = crear_seccion_horizontal(
+                ) = crear_seccion_desde_linea(
                     plano,
                     vista_alzado,
-                    disposicion,
-                    escala,
+                    linea_corte,
+                    punto_seccion,
                     escala_seccion,
                     escala_propia,
-                    altura_corte,
                 )
                 nombre_seccion = (
                     leer(vista_seccion, "GetName2") or "Sección A-A"
@@ -1619,19 +2039,6 @@ def procesar_pieza(
                 resultado["seccion"] = "creada"
                 plano.ForceRebuild3(False)
                 if diagnostico:
-                    hoja = tuple(
-                        valor * 1000.0
-                        for valor in linea_corte["hoja_m"]
-                    )
-                    local = tuple(
-                        valor * 1000.0
-                        for valor in linea_corte["vista_m"]
-                    )
-                    print(
-                        "  Sección: línea de corte en hoja "
-                        f"{hoja} mm; coordenadas locales de vista "
-                        f"{local} mm"
-                    )
                     print(
                         "  Sección creada con CreateSectionViewAt5: "
                         f"punto=({punto_seccion[0] * 1000.0:.1f}, "
@@ -1737,7 +2144,8 @@ def mostrar_uso():
     print(
         "Uso: motor_plano.py [--diagnostico] [--marca-centro <mm>] "
         "[--sin-escalar-marcas] [--formato a3|a4|a2] "
-        "[--sin-seccion] [--altura-corte <fraccion>] "
+        "[--con-seccion] [--sin-seccion] [--altura-corte <fraccion>] "
+        "[--corte auto|horizontal|vertical] "
         "<pieza.SLDPRT o carpeta> "
         "[otra pieza o carpeta ...]"
     )
@@ -1749,16 +2157,26 @@ def analizar_argumentos(argumentos):
     marca_centro_mm = TAMANO_MARCA_CENTRO_MM_POR_DEFECTO
     escalar_marcas = True
     nombre_formato = FORMATO_POR_DEFECTO
-    crear_seccion = True
+    # La sección es opt-in por decisión de diseño: no toda placa la necesita.
+    # La pide el usuario (y en el futuro el LLM) para cada pieza concreta.
+    crear_seccion = False
     altura_corte = ALTURA_CORTE_POR_DEFECTO
+    modo_corte = MODO_CORTE_POR_DEFECTO
     rutas = []
     indice = 0
     while indice < len(argumentos):
         argumento = argumentos[indice]
         if argumento == "--diagnostico":
             diagnostico = True
+        elif argumento == "--con-seccion":
+            crear_seccion = True
         elif argumento == "--sin-seccion":
-            crear_seccion = False
+            # Alias antiguo aceptado para no romper comandos guardados. Ya no
+            # cambia nada porque la sección está desactivada por defecto.
+            print(
+                "AVISO: --sin-seccion ya no es necesario; la sección solo "
+                "se crea cuando se indica --con-seccion."
+            )
         elif argumento == "--sin-escalar-marcas":
             escalar_marcas = False
         elif argumento == "--marca-centro":
@@ -1793,6 +2211,17 @@ def analizar_argumentos(argumentos):
                 raise ValueError(
                     "--altura-corte debe estar entre -1 y 1"
                 )
+        elif argumento == "--corte":
+            indice += 1
+            if indice >= len(argumentos):
+                raise ValueError(
+                    "falta el valor de --corte: auto, horizontal o vertical"
+                )
+            modo_corte = argumentos[indice].casefold()
+            if modo_corte not in MODOS_CORTE_VALIDOS:
+                raise ValueError(
+                    "--corte debe ser auto, horizontal o vertical"
+                )
         elif argumento == "--formato":
             indice += 1
             if indice >= len(argumentos):
@@ -1812,6 +2241,7 @@ def analizar_argumentos(argumentos):
         nombre_formato,
         crear_seccion,
         altura_corte,
+        modo_corte,
     )
 
 
@@ -1832,6 +2262,7 @@ def main():
             nombre_formato,
             crear_seccion,
             altura_corte,
+            modo_corte,
         ) = analizar_argumentos(sys.argv[1:])
     except ValueError as error:
         print(f"Error de argumentos: {error}")
@@ -1871,6 +2302,7 @@ def main():
                 formato=formato,
                 crear_seccion=crear_seccion,
                 altura_corte=altura_corte,
+                modo_corte=modo_corte,
             )
             resultados.append(resultado)
             imprimir_resultado(resultado)
