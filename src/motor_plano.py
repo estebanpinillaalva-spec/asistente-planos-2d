@@ -280,7 +280,10 @@ def detectar_taladros(pieza):
         if not caras:
             continue
         for cara in caras:
-            superficie = cara.GetSurface()
+            # GetSurface se comporta como PROPIEDAD en este late binding
+            # (devuelve ya el ISurface). Ponerle () llamaría al objeto COM
+            # devuelto y daría DISP_E_MEMBERNOTFOUND. Confirmado con sonda.
+            superficie = cara.GetSurface
             if superficie is None or not leer(superficie, "IsCylinder"):
                 continue
             # En una cara interior (agujero), la normal de la cara se opone a
