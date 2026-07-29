@@ -114,6 +114,9 @@ OCUPACION_MAXIMA_ISOMETRICA = 0.80
 # La línea de corte sobresale 5 mm por cada lado del alzado para que las
 # flechas no queden pegadas a la geometría. Se podrá ajustar tras verla.
 MARGEN_LINEA_CORTE_MM = 5.0
+# SolidWorks coloca "SECCIÓN A-A" debajo de la vista. Se reservan 12 mm
+# adicionales para que la etiqueta no invada la banda inferior del cajetín.
+ALTO_ETIQUETA_SECCION_MM = 12.0
 ALTURA_CORTE_POR_DEFECTO = 0.0
 MODO_CORTE_POR_DEFECTO = "auto"
 MODOS_CORTE_VALIDOS = ("auto", "horizontal", "vertical")
@@ -1535,8 +1538,95 @@ def aplicar_escala_independiente(vista, escala):
     vista.ScaleDecimal = escala["numerador"] / escala["denominador"]
 
 
-def elegir_escala_seccion(largo_mm, espesor_mm, escala_alzado, celda):
-    """Conserva la escala del alzado o busca una reducción que quepa."""
+def _excesos_rectangulo(rectangulo, limites):
+    """Devuelve cuánto rebasa un rectángulo cada lado, en milímetros."""
+    tolerancia_mm = 0.000001
+    excesos = []
+    valores = (
+        (
+            "por la izquierda",
+            limites["izquierda_mm"] - rectangulo["izquierda_mm"],
+        ),
+        (
+            "por la derecha",
+            rectangulo["derecha_mm"] - limites["derecha_mm"],
+        ),
+        (
+            "por abajo",
+            limites["inferior_mm"] - rectangulo["inferior_mm"],
+        ),
+        (
+            "por arriba",
+            rectangulo["superior_mm"] - limites["superior_mm"],
+        ),
+    )
+    for direccion, exceso_mm in valores:
+        if exceso_mm > tolerancia_mm:
+            excesos.append((direccion, exceso_mm))
+    return excesos
+
+
+def calcular_tamano_seccion(
+    largo_mm, medio_mm, espesor_mm, orientacion_corte, escala
+):
+    """Estima el rectángulo de la sección mediante caja y escala."""
+    factor = escala["numerador"] / escala["denominador"]
+    if orientacion_corte == "vertical":
+        # El corte vertical produce una tira: espesor en horizontal y la
+        # altura visible de la pieza en vertical.
+        ancho_mm = espesor_mm * factor
+        alto_mm = medio_mm * factor
+    else:
+        # El corte horizontal produce una tira apaisada: largo y espesor.
+        ancho_mm = largo_mm * factor
+        alto_mm = espesor_mm * factor
+    return {"ancho_mm": ancho_mm, "alto_mm": alto_mm}
+
+
+def calcular_colocacion_seccion(celda, tamano_vista):
+    """Coloca por aritmética la sección y reserva sitio para su etiqueta."""
+    centro_x_mm, centro_y_base_mm = _centro_celda(celda)
+    semiancho_mm = tamano_vista["ancho_mm"] / 2.0
+    semialto_mm = tamano_vista["alto_mm"] / 2.0
+
+    # Se parte del centro de la celda. Si la etiqueta entraría en el cajetín,
+    # se sube únicamente lo necesario, sin consultar contornos de SolidWorks.
+    centro_y_minimo_mm = (
+        celda["inferior_mm"]
+        + ALTO_ETIQUETA_SECCION_MM
+        + semialto_mm
+    )
+    centro_y_mm = max(centro_y_base_mm, centro_y_minimo_mm)
+
+    rectangulo_vista = {
+        "izquierda_mm": centro_x_mm - semiancho_mm,
+        "derecha_mm": centro_x_mm + semiancho_mm,
+        "inferior_mm": centro_y_mm - semialto_mm,
+        "superior_mm": centro_y_mm + semialto_mm,
+    }
+    # El rectángulo total incluye la banda que SolidWorks usa debajo de la
+    # vista para escribir la etiqueta "SECCIÓN A-A".
+    rectangulo_total = dict(rectangulo_vista)
+    rectangulo_total["inferior_mm"] -= ALTO_ETIQUETA_SECCION_MM
+
+    return {
+        "punto_m": (centro_x_mm / 1000.0, centro_y_mm / 1000.0),
+        "rectangulo_vista": rectangulo_vista,
+        "rectangulo_total": rectangulo_total,
+        "subida_mm": centro_y_mm - centro_y_base_mm,
+        "excesos": _excesos_rectangulo(rectangulo_total, celda),
+    }
+
+
+def elegir_maqueta_seccion(
+    largo_mm,
+    medio_mm,
+    espesor_mm,
+    orientacion_corte,
+    escala_alzado,
+    celda,
+):
+    """Conserva la escala del alzado o la reduce hasta incluir la etiqueta."""
     factor_alzado = (
         escala_alzado["numerador"] / escala_alzado["denominador"]
     )
@@ -1547,24 +1637,50 @@ def elegir_escala_seccion(largo_mm, espesor_mm, escala_alzado, celda):
     ]
     ultimo = candidatos[-1]
     for escala in candidatos:
-        factor = escala["numerador"] / escala["denominador"]
-        ocupacion = max(
-            largo_mm * factor / celda["ancho_mm"],
-            espesor_mm * factor / celda["alto_mm"],
+        tamano_vista = calcular_tamano_seccion(
+            largo_mm,
+            medio_mm,
+            espesor_mm,
+            orientacion_corte,
+            escala,
         )
-        if ocupacion <= OCUPACION_MAXIMA_ISOMETRICA:
-            return escala, escala["texto"] != escala_alzado["texto"], None
+        colocacion = calcular_colocacion_seccion(celda, tamano_vista)
+        if not colocacion["excesos"]:
+            return {
+                "escala": escala,
+                "escala_propia": escala["texto"] != escala_alzado["texto"],
+                "escala_reducida": escala["texto"] != escala_alzado["texto"],
+                "tamano_vista": tamano_vista,
+                **colocacion,
+                "aviso": None,
+            }
 
-    factor = ultimo["numerador"] / ultimo["denominador"]
-    ocupacion = max(
-        largo_mm * factor / celda["ancho_mm"],
-        espesor_mm * factor / celda["alto_mm"],
+    tamano_vista = calcular_tamano_seccion(
+        largo_mm,
+        medio_mm,
+        espesor_mm,
+        orientacion_corte,
+        ultimo,
+    )
+    colocacion = calcular_colocacion_seccion(celda, tamano_vista)
+    detalle_excesos = ", ".join(
+        f"{direccion} {exceso_mm:.1f} mm"
+        for direccion, exceso_mm in colocacion["excesos"]
     )
     aviso = (
-        "la sección no cabe en su celda ni a 1:20; se intentará crear "
-        f"igualmente. Ocupación estimada={ocupacion * 100.0:.1f} %"
+        "la sección y su etiqueta no caben en la celda ni a "
+        f"{ultimo['texto']}; se intentará crear igualmente"
     )
-    return ultimo, ultimo["texto"] != escala_alzado["texto"], aviso
+    if detalle_excesos:
+        aviso += f": {detalle_excesos}"
+    return {
+        "escala": ultimo,
+        "escala_propia": ultimo["texto"] != escala_alzado["texto"],
+        "escala_reducida": ultimo["texto"] != escala_alzado["texto"],
+        "tamano_vista": tamano_vista,
+        **colocacion,
+        "aviso": aviso,
+    }
 
 
 def _eliminar_segmento_parcial(plano, segmento):
@@ -1614,19 +1730,13 @@ def crear_seccion_desde_linea(
         # Firma de enlace tardío comprobada en la ayuda 2023:
         # CreateSectionViewAt5(x, y, z, etiqueta, opciones,
         #                      componentes_excluidos, profundidad).
-        # El método es silencioso. El corte vertical usa NotAligned para
-        # respetar la celda reservada. Los fallbacks solo añaden ScaleWithModel;
-        # nunca se activa ChangeDirection ("flip").
+        # El método es silencioso. NotAligned rompe la alineación con el
+        # alzado para que SolidWorks respete el centro calculado de la celda.
+        # El fallback solo añade ScaleWithModel; nunca se activa
+        # ChangeDirection ("flip").
         opciones_posibles = (
-            (
-                OPCIONES_SECCION_NO_ALINEADA,
-                OPCIONES_SECCION_NO_ALINEADA_ESCALA_MODELO,
-            )
-            if linea["orientacion"] == "vertical"
-            else (
-                OPCIONES_SECCION_NORMAL,
-                OPCIONES_SECCION_ESCALA_MODELO,
-            )
+            OPCIONES_SECCION_NO_ALINEADA,
+            OPCIONES_SECCION_NO_ALINEADA_ESCALA_MODELO,
         )
         for opciones in opciones_posibles:
             try:
@@ -1953,21 +2063,18 @@ def procesar_pieza(
                         altura_corte,
                     )
                 )
-                # Un corte vertical muestra la dimensión media y el espesor;
-                # uno horizontal muestra el largo y el espesor.
-                dimension_seccion = (
-                    medio
-                    if linea_corte["orientacion"] == "vertical"
-                    else largo
+                celda_seccion = disposicion["celdas"]["seccion_reservada"]
+                maqueta_seccion = elegir_maqueta_seccion(
+                    largo,
+                    medio,
+                    espesor,
+                    linea_corte["orientacion"],
+                    escala,
+                    celda_seccion,
                 )
-                escala_seccion, escala_propia, aviso_escala_seccion = (
-                    elegir_escala_seccion(
-                        dimension_seccion,
-                        espesor,
-                        escala,
-                        disposicion["celdas"]["seccion_reservada"],
-                    )
-                )
+                escala_seccion = maqueta_seccion["escala"]
+                escala_propia = maqueta_seccion["escala_propia"]
+                aviso_escala_seccion = maqueta_seccion["aviso"]
                 resultado["escala_seccion"] = escala_seccion["texto"]
                 if aviso_escala_seccion:
                     resultado["avisos"].append(aviso_escala_seccion)
@@ -1977,8 +2084,40 @@ def procesar_pieza(
                     resultado["avisos"].append(aviso_corte)
                     print(f"AVISO: {aviso_corte}")
 
-                punto_seccion = disposicion["coordenadas_seccion_m"]
+                punto_seccion = maqueta_seccion["punto_m"]
                 if diagnostico:
+                    rectangulo_celda = (
+                        celda_seccion["izquierda_mm"],
+                        celda_seccion["inferior_mm"],
+                        celda_seccion["derecha_mm"],
+                        celda_seccion["superior_mm"],
+                    )
+                    rectangulo_vista = maqueta_seccion["rectangulo_vista"]
+                    rectangulo_total = maqueta_seccion["rectangulo_total"]
+                    print(
+                        "  Celda de sección (izq, abajo, dcha, arriba): "
+                        f"{rectangulo_celda} mm"
+                    )
+                    print(
+                        "  Rectángulo estimado de la vista: "
+                        f"({rectangulo_vista['izquierda_mm']:.1f}, "
+                        f"{rectangulo_vista['inferior_mm']:.1f}, "
+                        f"{rectangulo_vista['derecha_mm']:.1f}, "
+                        f"{rectangulo_vista['superior_mm']:.1f}) mm"
+                    )
+                    print(
+                        "  Rectángulo estimado de vista + etiqueta: "
+                        f"({rectangulo_total['izquierda_mm']:.1f}, "
+                        f"{rectangulo_total['inferior_mm']:.1f}, "
+                        f"{rectangulo_total['derecha_mm']:.1f}, "
+                        f"{rectangulo_total['superior_mm']:.1f}) mm"
+                    )
+                    print(
+                        f"  Escala de sección: {escala_seccion['texto']}; "
+                        "reducida="
+                        f"{'sí' if maqueta_seccion['escala_reducida'] else 'no'}; "
+                        f"subida={maqueta_seccion['subida_mm']:.1f} mm"
+                    )
                     print(
                         "  Taladros detectados: "
                         f"{len(datos_corte['taladros'])}"
