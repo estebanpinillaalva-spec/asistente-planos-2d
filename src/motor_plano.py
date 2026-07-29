@@ -1,4 +1,4 @@
-r"""Crea planos de SolidWorks con alzado e isométrica.
+r"""Crea planos de SolidWorks con alzado, isométrica y sección opcional.
 
 Uso: .venv\Scripts\python.exe src\motor_plano.py "C:\ruta\pieza.SLDPRT"
 """
@@ -109,6 +109,16 @@ FACTOR_ANCHO_ISOMETRICA = 0.87
 FACTOR_ALTO_ISOMETRICA = 0.55
 # La isométrica no lleva cotas, por eso puede ocupar más celda que el alzado.
 OCUPACION_MAXIMA_ISOMETRICA = 0.80
+# La línea de corte sobresale 5 mm por cada lado del alzado para que las
+# flechas no queden pegadas a la geometría. Se podrá ajustar tras verla.
+MARGEN_LINEA_CORTE_MM = 5.0
+ALTURA_CORTE_POR_DEFECTO = 0.0
+# CreateSectionViewAt5 trabaja en silencio. Con options=0 crea una sección
+# completa, alineada y con la dirección predeterminada, sin cuadro de "flip".
+OPCIONES_SECCION_NORMAL = 0
+OPCIONES_SECCION_ESCALA_MODELO = 8  # swCreateSectionView_ScaleWithModel
+PROFUNDIDAD_SECCION_COMPLETA_M = 0.0
+ETIQUETA_SECCION = "A"
 TIPO_CUERPO_SOLIDO = 0
 
 # Valores numéricos de SolidWorks.Interop.swconst 31.2.1.1 (SolidWorks 2023).
@@ -349,11 +359,12 @@ def _centro_celda(celda):
 
 
 def calcular_disposicion(ancho_hoja_m, alto_hoja_m, tamanos):
-    """Centra alzado e isométrica en sus celdas fijas."""
+    """Centra cada vista en su celda fija de la maqueta."""
     area = calcular_area_util(ancho_hoja_m, alto_hoja_m)
     celdas = calcular_celdas(area)
     centro_alzado = _centro_celda(celdas["alzado"])
     centro_isometrica = _centro_celda(celdas["isometrica"])
+    centro_seccion = _centro_celda(celdas["seccion_reservada"])
 
     coordenadas_alzado_mm = (
         centro_alzado[0],
@@ -382,6 +393,41 @@ def calcular_disposicion(ancho_hoja_m, alto_hoja_m, tamanos):
         ),
         "coordenadas_isometrica_m": tuple(
             valor / 1000.0 for valor in coordenadas_isometrica_mm
+        ),
+        "coordenadas_seccion_m": tuple(
+            valor / 1000.0 for valor in centro_seccion
+        ),
+    }
+
+
+def calcular_linea_corte(disposicion, escala_alzado, altura_corte):
+    """Calcula la línea horizontal de corte sin consultar la geometría COM."""
+    centro_x_m, centro_y_m = disposicion["coordenadas_alzado_m"]
+    tamano_alzado = disposicion["tamanos"]["alzado"]
+    semiancho_papel_m = tamano_alzado["ancho_mm"] / 2000.0
+    semialto_papel_m = tamano_alzado["alto_mm"] / 2000.0
+    margen_papel_m = MARGEN_LINEA_CORTE_MM / 1000.0
+
+    y_hoja_m = centro_y_m + altura_corte * semialto_papel_m
+    x1_hoja_m = centro_x_m - semiancho_papel_m - margen_papel_m
+    x2_hoja_m = centro_x_m + semiancho_papel_m + margen_papel_m
+
+    factor_escala = (
+        escala_alzado["numerador"] / escala_alzado["denominador"]
+    )
+    # Al activar una vista de dibujo, CreateLine usa coordenadas locales de
+    # esa vista, no coordenadas de hoja. Se elimina aquí el factor de escala.
+    semiancho_modelo_m = semiancho_papel_m / factor_escala
+    margen_modelo_m = margen_papel_m / factor_escala
+    y_modelo_m = altura_corte * semialto_papel_m / factor_escala
+
+    return {
+        "hoja_m": (x1_hoja_m, y_hoja_m, x2_hoja_m, y_hoja_m),
+        "vista_m": (
+            -semiancho_modelo_m - margen_modelo_m,
+            y_modelo_m,
+            semiancho_modelo_m + margen_modelo_m,
+            y_modelo_m,
         ),
     }
 
@@ -1122,11 +1168,142 @@ def crear_vista_localizada(plano, pieza, ruta_modelo, tipo_vista, x, y):
 
 def aplicar_escala_isometrica(vista, escala):
     """Independiza la isométrica de la hoja y le asigna su propia escala."""
+    aplicar_escala_independiente(vista, escala)
+
+
+def aplicar_escala_independiente(vista, escala):
+    """Asigna una escala propia a una vista que no cabe con la de la hoja."""
     # En la API 2023, UseSheetScale es 0 cuando la escala es independiente.
     # Se usa ScaleDecimal porque acepta un número simple y es más fiable con
     # enlace tardío que ScaleRatio, que obliga a transferir un array por COM.
     vista.UseSheetScale = 0
     vista.ScaleDecimal = escala["numerador"] / escala["denominador"]
+
+
+def elegir_escala_seccion(largo_mm, espesor_mm, escala_alzado, celda):
+    """Conserva la escala del alzado o busca una reducción que quepa."""
+    factor_alzado = (
+        escala_alzado["numerador"] / escala_alzado["denominador"]
+    )
+    candidatos = [
+        escala
+        for escala in ESCALAS_NORMALIZADAS
+        if escala["numerador"] / escala["denominador"] <= factor_alzado
+    ]
+    ultimo = candidatos[-1]
+    for escala in candidatos:
+        factor = escala["numerador"] / escala["denominador"]
+        ocupacion = max(
+            largo_mm * factor / celda["ancho_mm"],
+            espesor_mm * factor / celda["alto_mm"],
+        )
+        if ocupacion <= OCUPACION_MAXIMA_ISOMETRICA:
+            return escala, escala["texto"] != escala_alzado["texto"], None
+
+    factor = ultimo["numerador"] / ultimo["denominador"]
+    ocupacion = max(
+        largo_mm * factor / celda["ancho_mm"],
+        espesor_mm * factor / celda["alto_mm"],
+    )
+    aviso = (
+        "la sección no cabe en su celda ni a 1:20; se intentará crear "
+        f"igualmente. Ocupación estimada={ocupacion * 100.0:.1f} %"
+    )
+    return ultimo, ultimo["texto"] != escala_alzado["texto"], aviso
+
+
+def _eliminar_segmento_parcial(plano, segmento):
+    """Borra la línea si la sección falló, para conservar el plano anterior."""
+    if segmento is None:
+        return
+    try:
+        plano.ClearSelection2(True)
+        if segmento.Select2(False, 0):
+            plano.EditDelete()
+    except Exception:
+        # Es una limpieza de último recurso: no debe ocultar el error original.
+        pass
+
+
+def crear_seccion_horizontal(
+    plano,
+    vista_alzado,
+    disposicion,
+    escala_alzado,
+    escala_seccion,
+    usar_escala_independiente,
+    altura_corte,
+):
+    """Crea una sección horizontal y devuelve sus datos de diagnóstico."""
+    segmento = None
+    linea = calcular_linea_corte(
+        disposicion, escala_alzado, altura_corte
+    )
+    punto_seccion = disposicion["coordenadas_seccion_m"]
+    nombre_vista_alzado = leer(vista_alzado, "GetName2")
+    if not nombre_vista_alzado:
+        raise RuntimeError("IView.GetName2 no devolvió el nombre del alzado")
+
+    try:
+        if not plano.ActivateView(nombre_vista_alzado):
+            raise RuntimeError(
+                f"IDrawingDoc.ActivateView no activó {nombre_vista_alzado}"
+            )
+        plano.ClearSelection2(True)
+
+        # El ejemplo oficial de 2023 activa la vista y llama directamente a
+        # CreateLine: no usa InsertSketch, porque la vista posee el croquis.
+        # SketchManager devuelve un objeto COM y se accede directamente.
+        sketch_manager = plano.SketchManager
+        x1, y1, x2, y2 = linea["vista_m"]
+        segmento = sketch_manager.CreateLine(x1, y1, 0.0, x2, y2, 0.0)
+        if segmento is None:
+            raise RuntimeError("ISketchManager.CreateLine no creó la línea")
+
+        errores = []
+        # Firma de enlace tardío comprobada en la ayuda 2023:
+        # CreateSectionViewAt5(x, y, z, etiqueta, opciones,
+        #                      componentes_excluidos, profundidad).
+        # El método es silencioso. Primero se usa 0 (sección completa normal);
+        # como alternativa se añade el flag 8 (ScaleWithModel), nunca "flip".
+        for opciones in (
+            OPCIONES_SECCION_NORMAL,
+            OPCIONES_SECCION_ESCALA_MODELO,
+        ):
+            try:
+                plano.ClearSelection2(True)
+                if not segmento.Select2(False, 0):
+                    raise RuntimeError(
+                        "ISketchSegment.Select2 no seleccionó la línea"
+                    )
+                vista_seccion = plano.CreateSectionViewAt5(
+                    punto_seccion[0],
+                    punto_seccion[1],
+                    0.0,
+                    ETIQUETA_SECCION,
+                    opciones,
+                    pythoncom.Empty,
+                    PROFUNDIDAD_SECCION_COMPLETA_M,
+                )
+                if vista_seccion is None:
+                    raise RuntimeError(
+                        "CreateSectionViewAt5 no devolvió una vista"
+                    )
+                if usar_escala_independiente:
+                    aplicar_escala_independiente(
+                        vista_seccion, escala_seccion
+                    )
+                plano.ClearSelection2(True)
+                return vista_seccion, linea, punto_seccion, opciones
+            except Exception as error:
+                errores.append(
+                    f"opciones={opciones}: {texto_error(error)}"
+                )
+
+        raise RuntimeError("; ".join(errores))
+    except Exception:
+        _eliminar_segmento_parcial(plano, segmento)
+        raise
 
 
 def guardar_plano(plano, ruta_salida):
@@ -1158,6 +1335,8 @@ def procesar_pieza(
     marca_centro_mm=TAMANO_MARCA_CENTRO_MM_POR_DEFECTO,
     escalar_marcas=True,
     formato=None,
+    crear_seccion=True,
+    altura_corte=ALTURA_CORTE_POR_DEFECTO,
 ):
     """Genera y guarda el plano de una pieza sin propagar sus errores."""
     resultado = {
@@ -1172,6 +1351,8 @@ def procesar_pieza(
         "eje_espesor": "-",
         "ocupacion_alzado": 0.0,
         "ocupacion_isometrica": 0.0,
+        "seccion": "pendiente" if crear_seccion else "omitida",
+        "escala_seccion": "-",
         "marca_centro_mm": marca_centro_mm,
         "escalar_marcas": escalar_marcas,
         "correcto": False,
@@ -1372,7 +1553,7 @@ def procesar_pieza(
                 cambios_anotaciones,
             )
 
-        _, nombre_alzado, metodo_alzado = crear_vista_localizada(
+        vista_alzado, nombre_alzado, metodo_alzado = crear_vista_localizada(
             plano,
             pieza,
             ruta_modelo,
@@ -1397,6 +1578,79 @@ def procesar_pieza(
         for aviso in avisos_restauracion:
             resultado["avisos"].append(aviso)
             print(f"AVISO: {aviso}")
+
+        if crear_seccion:
+            escala_seccion, escala_propia, aviso_escala_seccion = (
+                elegir_escala_seccion(
+                    largo,
+                    espesor,
+                    escala,
+                    disposicion["celdas"]["seccion_reservada"],
+                )
+            )
+            resultado["escala_seccion"] = escala_seccion["texto"]
+            if aviso_escala_seccion:
+                resultado["avisos"].append(aviso_escala_seccion)
+                print(f"AVISO: {aviso_escala_seccion}")
+
+            try:
+                (
+                    vista_seccion,
+                    linea_corte,
+                    punto_seccion,
+                    opciones_seccion,
+                ) = crear_seccion_horizontal(
+                    plano,
+                    vista_alzado,
+                    disposicion,
+                    escala,
+                    escala_seccion,
+                    escala_propia,
+                    altura_corte,
+                )
+                nombre_seccion = (
+                    leer(vista_seccion, "GetName2") or "Sección A-A"
+                )
+                resultado["vistas"] += 1
+                resultado["nombres_vista"].append(nombre_seccion)
+                resultado["metodos_vista"].append(
+                    f"CreateSectionViewAt5(opciones={opciones_seccion})"
+                )
+                resultado["seccion"] = "creada"
+                plano.ForceRebuild3(False)
+                if diagnostico:
+                    hoja = tuple(
+                        valor * 1000.0
+                        for valor in linea_corte["hoja_m"]
+                    )
+                    local = tuple(
+                        valor * 1000.0
+                        for valor in linea_corte["vista_m"]
+                    )
+                    print(
+                        "  Sección: línea de corte en hoja "
+                        f"{hoja} mm; coordenadas locales de vista "
+                        f"{local} mm"
+                    )
+                    print(
+                        "  Sección creada con CreateSectionViewAt5: "
+                        f"punto=({punto_seccion[0] * 1000.0:.1f}, "
+                        f"{punto_seccion[1] * 1000.0:.1f}) mm; "
+                        f"opciones={opciones_seccion}; "
+                        f"escala={escala_seccion['texto']}"
+                    )
+            except Exception as error:
+                aviso_seccion = (
+                    "no se pudo crear la sección; se guardará el plano con "
+                    f"alzado e isométrica: {texto_error(error)}"
+                )
+                resultado["avisos"].append(aviso_seccion)
+                resultado["seccion"] = "aviso"
+                print(f"AVISO: {aviso_seccion}")
+                if diagnostico:
+                    print(f"  Sección: AVISO: {texto_error(error)}")
+        elif diagnostico:
+            print("  Sección: omitida por --sin-seccion")
 
         errores_guardado, avisos_guardado = guardar_plano(plano, ruta_salida)
         if errores_guardado or avisos_guardado:
@@ -1463,6 +1717,8 @@ def imprimir_resultado(resultado):
         f"ocupación-alzado={resultado['ocupacion_alzado']:.1f}% | "
         f"ocupación-isométrica="
         f"{resultado['ocupacion_isometrica']:.1f}% | "
+        f"sección={resultado['seccion']} "
+        f"(escala={resultado['escala_seccion']}) | "
         f"vistas={resultado['vistas']} | "
         f"nombres={nombres} | "
         f"alzado={resultado['alzado_elegido']} "
@@ -1481,23 +1737,28 @@ def mostrar_uso():
     print(
         "Uso: motor_plano.py [--diagnostico] [--marca-centro <mm>] "
         "[--sin-escalar-marcas] [--formato a3|a4|a2] "
+        "[--sin-seccion] [--altura-corte <fraccion>] "
         "<pieza.SLDPRT o carpeta> "
         "[otra pieza o carpeta ...]"
     )
 
 
 def analizar_argumentos(argumentos):
-    """Separa las opciones de diagnóstico, formato y marcas de las rutas."""
+    """Separa las opciones de vistas, formato y marcas de las rutas."""
     diagnostico = False
     marca_centro_mm = TAMANO_MARCA_CENTRO_MM_POR_DEFECTO
     escalar_marcas = True
     nombre_formato = FORMATO_POR_DEFECTO
+    crear_seccion = True
+    altura_corte = ALTURA_CORTE_POR_DEFECTO
     rutas = []
     indice = 0
     while indice < len(argumentos):
         argumento = argumentos[indice]
         if argumento == "--diagnostico":
             diagnostico = True
+        elif argumento == "--sin-seccion":
+            crear_seccion = False
         elif argumento == "--sin-escalar-marcas":
             escalar_marcas = False
         elif argumento == "--marca-centro":
@@ -1514,6 +1775,23 @@ def analizar_argumentos(argumentos):
             if marca_centro_mm <= 0:
                 raise ValueError(
                     "el valor de --marca-centro debe ser mayor que cero"
+                )
+        elif argumento == "--altura-corte":
+            indice += 1
+            if indice >= len(argumentos):
+                raise ValueError(
+                    "falta la fracción de semialtura de --altura-corte"
+                )
+            texto_valor = argumentos[indice].replace(",", ".")
+            try:
+                altura_corte = float(texto_valor)
+            except ValueError as error:
+                raise ValueError(
+                    "el valor de --altura-corte debe ser un número decimal"
+                ) from error
+            if not -1.0 <= altura_corte <= 1.0:
+                raise ValueError(
+                    "--altura-corte debe estar entre -1 y 1"
                 )
         elif argumento == "--formato":
             indice += 1
@@ -1532,6 +1810,8 @@ def analizar_argumentos(argumentos):
         marca_centro_mm,
         escalar_marcas,
         nombre_formato,
+        crear_seccion,
+        altura_corte,
     )
 
 
@@ -1550,6 +1830,8 @@ def main():
             marca_centro_mm,
             escalar_marcas,
             nombre_formato,
+            crear_seccion,
+            altura_corte,
         ) = analizar_argumentos(sys.argv[1:])
     except ValueError as error:
         print(f"Error de argumentos: {error}")
@@ -1587,6 +1869,8 @@ def main():
                 marca_centro_mm=marca_centro_mm,
                 escalar_marcas=escalar_marcas,
                 formato=formato,
+                crear_seccion=crear_seccion,
+                altura_corte=altura_corte,
             )
             resultados.append(resultado)
             imprimir_resultado(resultado)
