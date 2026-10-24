@@ -3,6 +3,7 @@ r"""Crea planos de SolidWorks con alzado, isométrica y sección opcional.
 Uso: .venv\Scripts\python.exe src\motor_plano.py "C:\ruta\pieza.SLDPRT"
 """
 
+import os
 import sys
 import unicodedata
 from math import sqrt
@@ -23,9 +24,14 @@ from com_utils import (
 )
 
 
-# Carpeta configurable donde están los formatos de hoja de la escuela.
+# Carpeta de los formatos de hoja de la escuela. No se incluyen en el repo
+# (son de la universidad): se indica con la variable de entorno
+# PLANOS_PLANTILLAS o, si no existe, con la ruta local por defecto.
 CARPETA_PLANTILLAS = Path(
-    r"C:\Users\esteb\Desktop\TFG DOCUMENTACION\Plantillas_TFG (1)"
+    os.environ.get(
+        "PLANOS_PLANTILLAS",
+        str(Path.home() / "Desktop" / "TFG DOCUMENTACION" / "Plantillas_TFG (1)"),
+    )
 )
 
 # Medidas observadas de los formatos, en metros, usadas como estimación y

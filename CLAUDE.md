@@ -38,14 +38,14 @@ Objetivo primario: **portfolio potente + aprender IA aplicada**. Negocio: solo o
 
 ## Estado actual
 
-- **Fase 0 (Validación y encuadre)** — recién iniciada. Ver plan completo por fases en `ESTUDIO-Y-PLAN.md` §7.
-- **Repo:** https://github.com/estebanpinillaalva-spec/asistente-planos-2d — privado por ahora; pasar a público en Fase 4, cuando el portfolio esté presentable. Los modelos de `banco-de-pruebas/` están en `.gitignore` por **peso** (binarios CAD de ~2,4 MB que cambian enteros en cada guardado), no por confidencialidad: son piezas de trabajos universitarios de Esteban y **no hay material confidencial**, así que en Fase 4 se pueden publicar libremente capturas, DXF y PDF derivados de ellas.
-- Próxima tarea: **0.1 — test de 48h** con un MCP de SolidWorks existente (instrucciones en `EMPEZAR-AQUI.md`).
+- **El estado real está en el `git log`**, no en este documento. Plan completo por fases en `ESTUDIO-Y-PLAN.md` §7.
+- **Repo:** https://github.com/estebanpinillaalva-spec/asistente-planos-2d — preparado para ser público (README bilingüe en la raíz). Los formatos de hoja de la escuela no se versionan: el motor los busca en la variable de entorno `PLANOS_PLANTILLAS`. Los modelos de `banco-de-pruebas/` están en `.gitignore` por **peso** (binarios CAD de ~2,4 MB que cambian enteros en cada guardado), no por confidencialidad: son piezas de trabajos universitarios de Esteban y **no hay material confidencial**, así que en Fase 4 se pueden publicar libremente capturas, DXF y PDF derivados de ellas.
 
 ## Mapa de documentos
 
 | Archivo | Qué es |
 |---|---|
+| `README.md` | Presentación pública del proyecto (español e inglés) |
 | `ESTUDIO-Y-PLAN.md` | Estudio del reshape + plan de acción completo por fases. Documento maestro |
 | `EMPEZAR-AQUI.md` | Arranque de sesión y primer encargo (test 48h) |
 | `SPEC-familia.md` | Mini-spec de la familia de piezas (tarea 0.3, por rellenar) |
